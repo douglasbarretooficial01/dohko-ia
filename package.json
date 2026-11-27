@@ -10,7 +10,10 @@
     "migrate": "tsx src/db/migrate.ts",
     "migrate:prod": "node dist/db/migrate.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:web": "npm --prefix web run dev",
+    "build:web": "npm --prefix web run build",
+    "build:all": "npm run build && npm run build:web"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

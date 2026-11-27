@@ -1,4 +1,12 @@
-# ---- build ----
+# ---- front (React) ----
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+# ---- API ----
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
@@ -13,6 +21,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=web /web/dist ./web/dist
 COPY migrations ./migrations
 COPY package.json ./
 USER node
