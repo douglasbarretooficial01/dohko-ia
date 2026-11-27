@@ -65,13 +65,51 @@ export async function extract(buf: Buffer, filename: string, mime: string): Prom
     }
   }
 
+  if (ext === ".xlsx") {
+    return { kind: "text", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ...clip(await xlsxToText(buf)) };
+  }
+
   if (TEXT_EXT.has(ext) || mime.startsWith("text/")) {
     const text = buf.toString("utf8");
     if (text.includes("���")) throw new UploadError("ARQUIVO_NAO_E_TEXTO");
     return { kind: "text", mime: mime || "text/plain", ...clip(text) };
   }
 
-  throw new UploadError("FORMATO_NAO_SUPORTADO (use PDF, DOCX, CSV, TXT, MD, JSON ou imagem)");
+  throw new UploadError("FORMATO_NAO_SUPORTADO (use PDF, DOCX, XLSX, CSV, TXT, MD, JSON ou imagem)");
+}
+
+/** Converte cada aba da planilha em linhas separadas por " | " (valores calculados, não fórmulas). */
+async function xlsxToText(buf: Buffer) {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  try {
+    await wb.xlsx.load(buf as any);
+  } catch {
+    throw new UploadError("XLSX_ILEGIVEL", 422);
+  }
+  const cell = (v: any): string => {
+    if (v == null) return "";
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "object") {
+      if ("result" in v) return cell(v.result); // fórmula → valor calculado
+      if ("text" in v) return String(v.text); // hiperlink
+      if ("richText" in v) return v.richText.map((r: any) => r.text).join("");
+      if ("error" in v) return String(v.error);
+    }
+    return String(v).replace(/\s+/g, " ").trim();
+  };
+  const parts: string[] = [];
+  wb.eachSheet((ws) => {
+    const rows: string[] = [];
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      const values = (row.values as any[]).slice(1).map(cell);
+      while (values.length && values.at(-1) === "") values.pop();
+      if (values.length) rows.push(values.join(" | "));
+    });
+    if (rows.length) parts.push(`## Aba: ${ws.name}\n${rows.join("\n")}`);
+  });
+  if (!parts.length) throw new UploadError("PLANILHA_VAZIA", 422);
+  return parts.join("\n\n");
 }
 
 /** Bloco de texto do anexo como o modelo recebe. */

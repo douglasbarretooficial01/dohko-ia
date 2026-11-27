@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type ConvSummary, type Me, type ModelInfo } from "./api";
+import { api, ApiError, type ConvSummary, type ExpertSummary, type Me, type ModelInfo } from "./api";
 import { AdminPanel } from "./components/AdminPanel";
 import { Auth } from "./components/Auth";
+import { ExpertsModal } from "./components/ExpertsModal";
+import { TeamModal } from "./components/TeamModal";
 import { PlansModal } from "./components/PlansModal";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
@@ -21,6 +23,10 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [experts, setExperts] = useState<ExpertSummary[]>([]);
+  const [expertsOpen, setExpertsOpen] = useState<{ id?: string | null } | null>(null);
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [invite] = useState(() => new URLSearchParams(location.search).get("convite"));
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -29,6 +35,7 @@ export function App() {
 
   const refreshMe = useCallback(() => api.me().then(setMe).catch(() => {}), []);
   const refreshConvs = useCallback(() => api.conversations().then(setConvs).catch(() => {}), []);
+  const refreshExperts = useCallback(() => api.experts().then(setExperts).catch(() => {}), []);
 
   useEffect(() => {
     api
@@ -49,10 +56,29 @@ export function App() {
     if (!me) return;
     api.models().then(setModels);
     refreshConvs();
-  }, [me?.user.id, refreshConvs]); // eslint-disable-line react-hooks/exhaustive-deps
+    refreshExperts();
+  }, [me?.user.id, me?.workspace.id, refreshConvs, refreshExperts]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const newConversation = async (kind: "chat" | "build") => {
-    const c = await api.createConversation(kind);
+  // já logado e abriu um link de convite: entra na equipe
+  useEffect(() => {
+    if (!me || !invite) return;
+    history.replaceState(null, "", "/");
+    api
+      .acceptInvite(invite)
+      .then(() => api.me().then(setMe))
+      .then(() => flash("Você entrou na equipe!"))
+      .catch((e) => flash(e instanceof ApiError && e.code === "CONVITE_JA_USADO" ? "Este convite já foi usado." : "Convite inválido ou expirado."));
+  }, [me?.user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const switchWorkspace = async (id: string) => {
+    await api.switchWorkspace(id);
+    setActiveId(null);
+    setAdminOpen(false);
+    setMe(await api.me());
+  };
+
+  const newConversation = async (kind: "chat" | "build", expertId?: string) => {
+    const c = await api.createConversation(kind, expertId);
     setConvs((cs) => [c, ...cs]);
     setActiveId(c.id);
     setAdminOpen(false);
@@ -67,7 +93,16 @@ export function App() {
   };
 
   if (loading) return <div className="splash"><div className="logo-mark big">D</div></div>;
-  if (!me) return <Auth onAuth={setMe} />;
+  if (!me)
+    return (
+      <Auth
+        invite={invite}
+        onAuth={(m) => {
+          if (invite) history.replaceState(null, "", "/");
+          setMe(m);
+        }}
+      />
+    );
 
   return (
     <div className={`shell ${menuOpen ? "menu-open" : ""}`}>
@@ -93,6 +128,17 @@ export function App() {
         }}
         onPlans={() => setPlansOpen(true)}
         onLogout={logout}
+        experts={experts}
+        onExpertChat={(id) => newConversation("chat", id)}
+        onExperts={() => {
+          setExpertsOpen({});
+          setMenuOpen(false);
+        }}
+        onTeam={() => {
+          setTeamOpen(true);
+          setMenuOpen(false);
+        }}
+        onSwitchWorkspace={switchWorkspace}
       />
       <div className="backdrop" onClick={() => setMenuOpen(false)} />
       <main className="main">
@@ -123,6 +169,19 @@ export function App() {
           onError={flash}
         />
       )}
+      {expertsOpen && models && (
+        <ExpertsModal
+          models={models}
+          initialId={expertsOpen.id}
+          onClose={() => setExpertsOpen(null)}
+          onChanged={refreshExperts}
+          onStart={(id) => {
+            setExpertsOpen(null);
+            newConversation("chat", id);
+          }}
+        />
+      )}
+      {teamOpen && <TeamModal me={me} onClose={() => setTeamOpen(false)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

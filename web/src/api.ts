@@ -10,9 +10,17 @@ export interface Plan {
   priceBRL: number;
   monthlyCredits: number;
 }
+export interface WorkspaceRef {
+  id: string;
+  name: string;
+  planId: string;
+  role: "owner" | "member";
+}
 export interface Me {
   user: { id: string; name: string; email: string };
   isAdmin?: boolean;
+  role: "owner" | "member";
+  workspaces: WorkspaceRef[];
   workspace: { id: string; name: string; planId: string; plan?: Plan };
   balance: Balance;
 }
@@ -28,7 +36,47 @@ export interface ConvSummary {
   kind: "chat" | "build";
   title: string;
   artifact_version: number;
-  updated_at: string;
+  updated_at?: string;
+  expert_id?: string | null;
+  expert_emoji?: string | null;
+  expert_name?: string | null;
+}
+export interface ExpertSummary {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string;
+  model: string;
+  created_by: string;
+  created_by_name: string;
+  files: number;
+}
+export interface ExpertDetail {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string;
+  instructions: string;
+  model: string;
+  canEdit: boolean;
+  files: { id: string; name: string; size_bytes: number; truncated: boolean; chars: number }[];
+  knowledgeChars: number;
+  knowledgeLimit: number;
+}
+export interface ExpertInput {
+  name: string;
+  emoji: string;
+  description: string;
+  instructions: string;
+  model: string;
+}
+export interface ExpertTemplate extends Omit<ExpertInput, "model"> {
+  key: string;
+}
+export interface TeamData {
+  role: "owner" | "member";
+  members: { id: string; name: string; email: string; role: "owner" | "member"; joined_at: string }[];
+  invites: { token: string; role: string; expires_at: string }[];
 }
 export interface AttachmentRef {
   id: string;
@@ -60,6 +108,7 @@ export interface Conversation {
   artifactHtml: string | null;
   artifactVersion: number;
   published: Published | null;
+  expert: { id: string; name: string; emoji: string; description: string } | null;
   messages: Message[];
 }
 
@@ -104,13 +153,35 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 export const api = {
   me: () => req<Me>("GET", "/api/me"),
-  signup: (b: { name: string; email: string; password: string; company?: string }) => req<Me>("POST", "/api/auth/signup", b),
-  login: (b: { email: string; password: string }) => req<Me>("POST", "/api/auth/login", b),
+  signup: (b: { name: string; email: string; password: string; company?: string; inviteToken?: string }) => req<Me>("POST", "/api/auth/signup", b),
+  login: (b: { email: string; password: string; inviteToken?: string }) => req<Me>("POST", "/api/auth/login", b),
+  invite: (token: string) => req<{ workspaceName: string; inviter: string }>("GET", `/api/invites/${token}`),
+  acceptInvite: (token: string) => req<{ workspaceId: string }>("POST", "/api/team/accept", { token }),
+  switchWorkspace: (workspaceId: string) => req("POST", "/api/workspaces/switch", { workspaceId }),
+  team: () => req<TeamData>("GET", "/api/team"),
+  createInvite: () => req<{ token: string; path: string; expiresInDays: number }>("POST", "/api/team/invites", {}),
+  revokeInvite: (token: string) => req("DELETE", `/api/team/invites/${token}`),
+  removeMember: (userId: string) => req("DELETE", `/api/team/members/${userId}`),
+  experts: () => req<ExpertSummary[]>("GET", "/api/experts"),
+  expert: (id: string) => req<ExpertDetail>("GET", `/api/experts/${id}`),
+  expertTemplates: () => req<ExpertTemplate[]>("GET", "/api/expert-templates"),
+  createExpert: (b: ExpertInput) => req<{ id: string }>("POST", "/api/experts", b),
+  updateExpert: (id: string, b: ExpertInput) => req("PATCH", `/api/experts/${id}`, b),
+  deleteExpert: (id: string) => req("DELETE", `/api/experts/${id}`),
+  deleteExpertFile: (id: string, fileId: string) => req("DELETE", `/api/experts/${id}/files/${fileId}`),
+  uploadExpertFile: async (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch(`/api/experts/${id}/files`, { method: "POST", body: fd, credentials: "same-origin" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new ApiError(r.status, data.error ?? "ERRO", data);
+    return data as { id: string; name: string; chars: number; truncated: boolean };
+  },
   logout: () => req("POST", "/api/auth/logout"),
   models: () => req<{ auto: { id: string; label: string; description: string }; models: ModelInfo[] }>("GET", "/api/models"),
   plans: () => req<Plan[]>("GET", "/api/plans"),
   conversations: () => req<ConvSummary[]>("GET", "/api/conversations"),
-  createConversation: (kind: "chat" | "build") => req<ConvSummary>("POST", "/api/conversations", { kind }),
+  createConversation: (kind: "chat" | "build", expertId?: string) => req<ConvSummary>("POST", "/api/conversations", { kind, expertId }),
   conversation: (id: string) => req<Conversation>("GET", `/api/conversations/${id}`),
   rename: (id: string, title: string) => req("PATCH", `/api/conversations/${id}`, { title }),
   remove: (id: string) => req("DELETE", `/api/conversations/${id}`),

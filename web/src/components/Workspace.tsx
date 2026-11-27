@@ -16,7 +16,7 @@ interface Props {
 
 type PendingFile = (UploadedFile & { uploading?: false }) | { id: string; name: string; kind: "text" | "image"; uploading: true; preview?: string };
 
-const ACCEPT = ".pdf,.docx,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.webp,.gif";
+const ACCEPT = ".pdf,.docx,.xlsx,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.webp,.gif";
 const UPLOAD_ERRORS: Record<string, string> = {
   ARQUIVO_MAIOR_QUE_10MB: "passa de 10 MB",
   IMAGEM_MAIOR_QUE_5MB: "imagem passa de 5 MB",
@@ -214,6 +214,7 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
       {dragging && <div className="drop-hint">Solte os arquivos para anexar</div>}
       <header className="chat-head">
         <h2 className="chat-title">{isBuild ? "⚡ " : ""}{messages.length ? conv.title : isBuild ? "Novo app" : "Nova conversa"}</h2>
+        {conv.expert && <span className="expert-badge" title={conv.expert.description}>{conv.expert.emoji} {conv.expert.name}</span>}
         <ModelPicker models={models} value={model} onChange={chooseModel} />
       </header>
 
@@ -221,9 +222,11 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
         {messages.length === 0 && (
           <div className="empty">
             <div className="logo-mark big">D</div>
-            <h3>{isBuild ? "Descreva o app que você quer criar" : "Como posso ajudar?"}</h3>
+            {conv.expert && <div className="expert-hero">{conv.expert.emoji}</div>}
+            <h3>{isBuild ? "Descreva o app que você quer criar" : conv.expert ? `${conv.expert.name}: como posso ajudar?` : "Como posso ajudar?"}</h3>
+            {conv.expert?.description && <p className="muted">{conv.expert.description}</p>}
             <div className="suggestions">
-              {suggestions.map((s) => (
+              {!conv.expert && suggestions.map((s) => (
                 <button key={s} className="suggestion" onClick={() => send(s)}>{s}</button>
               ))}
             </div>

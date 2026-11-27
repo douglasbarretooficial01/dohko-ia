@@ -1,4 +1,4 @@
-import type { ConvSummary, Me } from "../api";
+import type { ConvSummary, ExpertSummary, Me } from "../api";
 import { fmt } from "../api";
 
 interface Props {
@@ -11,15 +11,21 @@ interface Props {
   onPlans: () => void;
   onLogout: () => void;
   onAdmin: () => void;
+  experts: ExpertSummary[];
+  onExpertChat: (id: string) => void;
+  onExperts: () => void;
+  onTeam: () => void;
+  onSwitchWorkspace: (id: string) => void;
 }
 
-export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlans, onLogout, onAdmin }: Props) {
+export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlans, onLogout, onAdmin, experts, onExpertChat, onExperts, onTeam, onSwitchWorkspace }: Props) {
   const chats = convs.filter((c) => c.kind === "chat");
   const apps = convs.filter((c) => c.kind === "build");
   const b = me.balance;
 
   const Item = ({ c }: { c: ConvSummary }) => (
     <div className={`conv ${c.id === activeId ? "active" : ""}`} onClick={() => onSelect(c.id)} title={c.title}>
+      {c.expert_emoji && <span className="conv-emoji" title={c.expert_name ?? ""}>{c.expert_emoji}</span>}
       <span className="conv-title">{c.title}</span>
       {c.kind === "build" && c.artifact_version > 0 && <span className="tag">v{c.artifact_version}</span>}
       <button
@@ -47,6 +53,19 @@ export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlan
       </div>
 
       <div className="conv-list">
+        <div className="section section-row">
+          <span>Especialistas</span>
+          <button className="link small" onClick={onExperts}>{experts.length ? "gerenciar" : "＋ criar"}</button>
+        </div>
+        {experts.slice(0, 6).map((e) => (
+          <div key={e.id} className="conv" onClick={() => onExpertChat(e.id)} title={`Nova conversa com ${e.name}`}>
+            <span className="conv-emoji">{e.emoji}</span>
+            <span className="conv-title">{e.name}</span>
+          </div>
+        ))}
+        {experts.length === 0 && (
+          <button className="expert-cta" onClick={onExperts}>Crie assistentes com as instruções e os documentos da sua empresa</button>
+        )}
         {apps.length > 0 && (
           <>
             <div className="section">Apps</div>
@@ -58,9 +77,10 @@ export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlan
         {chats.map((c) => <Item key={c.id} c={c} />)}
       </div>
 
-      {me.isAdmin && (
-        <button className="admin-link" onClick={onAdmin}>📊 Painel de uso e margem</button>
-      )}
+      <div className="side-links">
+        <button className="admin-link" onClick={onTeam}>👥 Equipe</button>
+        {me.isAdmin && <button className="admin-link" onClick={onAdmin}>📊 Painel</button>}
+      </div>
       <div className="credit-card">
         <div className="credit-head">
           <span className="muted small">Créditos</span>
@@ -79,7 +99,13 @@ export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlan
         <div className="avatar">{me.user.name[0]?.toUpperCase()}</div>
         <div className="user-info">
           <strong>{me.user.name}</strong>
-          <span className="muted small">{me.workspace.name}</span>
+          {me.workspaces.length > 1 ? (
+            <select className="ws-select" value={me.workspace.id} onChange={(e) => onSwitchWorkspace(e.target.value)} title="Trocar de workspace">
+              {me.workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          ) : (
+            <span className="muted small">{me.workspace.name}</span>
+          )}
         </div>
         <button className="link small" onClick={onLogout}>Sair</button>
       </div>

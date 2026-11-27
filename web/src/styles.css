@@ -276,3 +276,45 @@ a { color: var(--gold-2); }
 .table th { color: var(--muted); font-weight: 500; }
 .table td.bad { color: var(--danger); }
 @media (max-width: 900px) { .pub-menu { width: min(360px, 90vw); right: -60px; } }
+
+/* ---------- especialistas e equipe ---------- */
+.section-row { display: flex; align-items: center; justify-content: space-between; }
+.section-row .link { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.conv-emoji { width: 18px; text-align: center; flex-shrink: 0; }
+.expert-cta { width: 100%; text-align: left; background: #f5b3010d; border: 1px dashed #f5b30155; border-radius: 10px; padding: 9px 10px; font-size: 12.5px; color: #d8c48a; margin: 2px 0 4px; }
+.expert-cta:hover { background: #f5b3011a; }
+.side-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.side-links .admin-link:only-child { grid-column: span 2; }
+.ws-select { background: transparent; border: 0; color: var(--muted); font-size: 13px; padding: 0; max-width: 150px; cursor: pointer; outline: none; }
+.expert-badge { font-size: 13px; background: #f5b30114; border: 1px solid #f5b30144; color: var(--gold-2); padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
+.expert-hero { font-size: 44px; }
+.experts-modal, .team-modal { width: min(860px, 100%); }
+.modal .sub { font-size: 14px; margin: 22px 0 10px; color: var(--muted); font-weight: 500; }
+.expert-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 14px; }
+.expert-card { text-align: left; display: grid; gap: 8px; align-content: start; background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.expert-card.tpl { transition: .15s; }
+.expert-card.tpl:hover { border-color: #f5b30166; }
+.expert-card.blank { place-items: center; align-content: center; border-style: dashed; min-height: 110px; }
+.expert-card p { margin: 0; }
+.expert-top { display: flex; align-items: center; gap: 10px; }
+.expert-emoji { font-size: 26px; width: 34px; text-align: center; }
+.expert-actions { display: flex; gap: 8px; margin-top: 4px; }
+.expert-form { display: grid; gap: 14px; margin-top: 14px; }
+.expert-form label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.expert-form input, .expert-form textarea, .expert-form select {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); outline: none; font: inherit; resize: vertical;
+}
+.expert-form input:focus, .expert-form textarea:focus, .expert-form select:focus { border-color: var(--gold); }
+.expert-form .row { display: flex; gap: 12px; flex-wrap: wrap; }
+.expert-form .grow { flex: 1; min-width: 200px; }
+.emoji-field select { font-size: 18px; padding: 7px 10px; }
+.knowledge { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
+.knowledge-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.meter { height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold-2), var(--gold)); }
+.kfile { display: flex; align-items: center; gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
+.kfile span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form-actions { display: flex; align-items: center; gap: 12px; }
+.invite-box { display: grid; gap: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
+.invite-banner { background: #f5b30114; border: 1px solid #f5b30144; border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.5; }
+.team-modal .table { margin-top: 8px; }

@@ -1,14 +1,28 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type Me } from "../api";
 
 const MESSAGES: Record<string, string> = {
   EMAIL_JA_CADASTRADO: "Este e-mail já tem conta. Entre com sua senha.",
   EMAIL_OU_SENHA_INVALIDOS: "E-mail ou senha incorretos.",
   ENTRADA_INVALIDA: "Confira os campos: e-mail válido e senha com pelo menos 8 caracteres.",
+  CONVITE_JA_USADO: "Este convite já foi usado. Peça um novo link.",
+  CONVITE_EXPIRADO: "Este convite expirou. Peça um novo link.",
+  CONVITE_INVALIDO: "Convite inválido. Peça um novo link.",
 };
 
-export function Auth({ onAuth }: { onAuth: (me: Me) => void }) {
+export function Auth({ onAuth, invite }: { onAuth: (me: Me) => void; invite?: string | null }) {
   const [mode, setMode] = useState<"login" | "signup">("signup");
+  const [inviteInfo, setInviteInfo] = useState<{ workspaceName: string; inviter: string } | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!invite) return;
+    api
+      .invite(invite)
+      .then(setInviteInfo)
+      .catch((e) => setInviteError(e instanceof ApiError ? MESSAGES[e.code] ?? MESSAGES.CONVITE_INVALIDO : MESSAGES.CONVITE_INVALIDO));
+  }, [invite]);
+  const inviteToken = inviteInfo && invite ? invite : undefined;
   const [form, setForm] = useState({ name: "", company: "", email: "", password: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -21,8 +35,8 @@ export function Auth({ onAuth }: { onAuth: (me: Me) => void }) {
     try {
       const me =
         mode === "signup"
-          ? await api.signup({ name: form.name, email: form.email, password: form.password, company: form.company || undefined })
-          : await api.login({ email: form.email, password: form.password });
+          ? await api.signup({ name: form.name, email: form.email, password: form.password, company: form.company || undefined, inviteToken })
+          : await api.login({ email: form.email, password: form.password, inviteToken });
       onAuth(me);
     } catch (err) {
       setError(err instanceof ApiError ? MESSAGES[err.code] ?? "Não foi possível continuar. Tente de novo." : "Sem conexão com o servidor.");
@@ -50,19 +64,28 @@ export function Auth({ onAuth }: { onAuth: (me: Me) => void }) {
         </ul>
       </div>
       <form className="auth-card" onSubmit={submit}>
-        <h2>{mode === "signup" ? "Crie sua conta grátis" : "Entrar"}</h2>
-        <p className="muted small">{mode === "signup" ? "5 créditos por dia para criar, sem cartão." : "Bom te ver de novo."}</p>
+        {inviteInfo && (
+          <div className="invite-banner">
+            <strong>{inviteInfo.inviter}</strong> convidou você para a equipe <strong>{inviteInfo.workspaceName}</strong> na Dohko IA.
+            <span className="muted small"> Crie sua conta ou entre para aceitar.</span>
+          </div>
+        )}
+        {inviteError && <div className="form-error">{inviteError}</div>}
+        <h2>{mode === "signup" ? (inviteInfo ? "Crie sua conta" : "Crie sua conta grátis") : "Entrar"}</h2>
+        <p className="muted small">
+          {mode === "signup" ? (inviteInfo ? "Você vai usar os créditos da equipe." : "5 créditos por dia para criar, sem cartão.") : "Bom te ver de novo."}
+        </p>
         {mode === "signup" && (
-          <>
-            <label>
-              Seu nome
-              <input required minLength={2} value={form.name} onChange={set("name")} autoComplete="name" />
-            </label>
-            <label>
-              <span>Empresa <span className="muted">(opcional)</span></span>
-              <input value={form.company} onChange={set("company")} autoComplete="organization" />
-            </label>
-          </>
+          <label>
+            Seu nome
+            <input required minLength={2} value={form.name} onChange={set("name")} autoComplete="name" />
+          </label>
+        )}
+        {mode === "signup" && !inviteInfo && (
+          <label>
+            <span>Empresa <span className="muted">(opcional)</span></span>
+            <input value={form.company} onChange={set("company")} autoComplete="organization" />
+          </label>
         )}
         <label>
           E-mail

@@ -5,7 +5,9 @@ A IA de trabalho da Dohko Technology:
 - **Chat multimodelo**: GPT, Claude e Gemini num só lugar. O **Dohko One** escolhe o modelo certo para cada pedido (rápido e barato para o simples, forte para análise e código).
 - **Construtor de apps**: a pessoa descreve um app e recebe um app web funcionando, com prévia ao vivo (computador e celular), versões, código e download.
 - **Publicar com um clique**: o app ganha um link público (`/p/nome-do-app`) que qualquer pessoa abre. Editar o app não muda o que está no ar até você clicar em "Atualizar".
-- **Anexos no chat**: PDF, Word (.docx), CSV, TXT, Markdown, JSON e imagens (PNG, JPG, WebP). Arraste para o chat, cole uma imagem ou use o 📎.
+- **Anexos no chat**: PDF, Word (.docx), Excel (.xlsx), CSV, TXT, Markdown, JSON e imagens (PNG, JPG, WebP). Arraste para o chat, cole uma imagem ou use o 📎.
+- **Especialistas**: assistentes com instruções, modelo padrão e base de conhecimento (até 20 documentos) da empresa. Há modelos prontos (copywriter, analista financeiro, atendimento, social media). Toda a equipe usa.
+- **Equipe**: o dono gera links de convite (válidos por 7 dias, 1 pessoa cada). Todos compartilham créditos e especialistas; as conversas de cada um são privadas. Quem participa de mais de uma empresa troca de workspace no menu.
 - **Créditos em reais**: o custo estimado aparece antes de enviar; a cobrança é pelo custo real, com margem; créditos grátis diários, planos e recargas pelo Stripe.
 - **Painel de uso e margem** (para administradores): receita, custo real de IA, margem por modelo e por dia, usuários e assinaturas.
 
@@ -146,7 +148,9 @@ O Caddy emite o HTTPS sozinho. O banco e a API ficam presos ao `127.0.0.1`, e s�
 web/                 interface (React + Vite), servida pela própria API em produção
 src/
   routes/user.ts     /api: conta, conversas, chat em streaming, construtor, anexos, publicação, painel, cobrança
-  uploads.ts         leitura de PDF, Word, CSV, texto e imagens
+  routes/experts.ts  especialistas e base de conhecimento
+  routes/team.ts     convites, membros e troca de workspace
+  uploads.ts         leitura de PDF, Word, Excel, CSV, texto e imagens
   llm/               catálogo de modelos, Dohko One, OpenRouter, modo simulado, prompts
   credits/           motor de créditos (preço, reserva, cobrança, ledger)
   billing/           Stripe (checkout, recarga, webhooks)

@@ -29,8 +29,17 @@ describe("extração de arquivos", () => {
     expect(img).toMatchObject({ kind: "image", mime: "image/png", text: null });
   });
 
+  it("Excel: todas as abas, com cabeçalho e valores", async () => {
+    const t = (await extract(fx("financeiro.xlsx"), "financeiro.xlsx", "")).text!;
+    expect(t).toContain("## Aba: Vendas");
+    expect(t).toContain("Mês | Faturamento | Clientes");
+    expect(t).toContain("Outubro | 120000 | 52");
+    expect(t).toContain("## Aba: Custos");
+    await expect(extract(Buffer.from("PK\u0003\u0004lixo"), "x.xlsx", "")).rejects.toThrow(/XLSX_ILEGIVEL/);
+  });
+
   it("recusa formato desconhecido e corta texto gigante", async () => {
-    await expect(extract(Buffer.from([0, 1, 2]), "planilha.xlsx", "application/octet-stream")).rejects.toThrow(/FORMATO_NAO_SUPORTADO/);
+    await expect(extract(Buffer.from([0, 1, 2]), "apresentacao.pptx", "application/octet-stream")).rejects.toThrow(/FORMATO_NAO_SUPORTADO/);
     const big = await extract(Buffer.from("a".repeat(200_000)), "grande.txt", "text/plain");
     expect(big.truncated).toBe(true);
     expect(big.text!.length).toBe(120_000);
@@ -177,7 +186,7 @@ describe.skipIf(!DB)("publicação, anexos e painel", () => {
   });
 
   it("formato não suportado → 415", async () => {
-    const r = await as("ana").upload("planilha.xlsx", Buffer.from("PK\u0003\u0004xx"), "application/vnd.ms-excel");
+    const r = await as("ana").upload("apresentacao.pptx", Buffer.from("PK\u0003\u0004xx"), "application/vnd.ms-powerpoint");
     expect(r.statusCode).toBe(415);
   });
 

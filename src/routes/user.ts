@@ -13,11 +13,14 @@ import { BUILDER_SYSTEM, CHAT_SYSTEM, extractHtml, stripHtmlBlock } from "../llm
 import { approxInputTokens, approxTokens, type ChatMsg, type ContentPart, type LLMProvider } from "../llm/provider.js";
 import { CONFIG } from "../credits/config.js";
 import { attachmentBlock, extract, slugify, UploadError } from "../uploads.js";
+import { expertRoutes, expertSystemPrompt, loadExpertContext } from "./experts.js";
+import { acceptInvite, checkInvite, teamRoutes } from "./team.js";
 import { routeTier } from "../llm/router.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     session?: Session;
+    role?: "owner" | "member";
   }
 }
 
@@ -71,9 +74,14 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   // Tudo em /api exige sessão, exceto cadastro e login
   app.addHook("preHandler", async (req) => {
     if (req.url.startsWith("/api/auth/signup") || req.url.startsWith("/api/auth/login")) return;
+    if (req.method === "GET" && req.url.startsWith("/api/invites/")) return;
     const s = verifySession(req.cookies[COOKIE], d.sessionSecret);
     if (!s) throw err(401, "SESSAO_INVALIDA");
+    // quem foi removido da equipe perde o acesso na hora, mesmo com o cookie válido
+    const m = await pool.query("select role from memberships where user_id = $1 and workspace_id = $2", [s.uid, s.wid]);
+    if (!m.rowCount) throw err(401, "SESSAO_INVALIDA");
     req.session = s;
+    req.role = m.rows[0].role;
   });
 
   const me = async (uid: string, wid: string) => {
@@ -86,7 +94,13 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     );
     if (!r.rowCount) throw err(401, "SESSAO_INVALIDA");
     const x = r.rows[0];
+    const ws = await pool.query(
+      `select w.id, w.name, w.plan_id, m.role from memberships m join workspaces w on w.id = m.workspace_id where m.user_id = $1 order by m.created_at`,
+      [uid],
+    );
     return {
+      workspaces: ws.rows.map((w) => ({ id: w.id, name: w.name, planId: w.plan_id, role: w.role })),
+      role: ws.rows.find((w) => w.id === wid)?.role ?? "member",
       user: { id: x.id, name: x.name, email: x.email },
       isAdmin: isAdmin(x.email),
       workspace: { id: x.wid, name: x.wname, planId: x.plan_id, plan: PLANS[x.plan_id] },
@@ -103,18 +117,24 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
         email: z.string().trim().toLowerCase().email(),
         password: z.string().min(8, "A senha precisa de pelo menos 8 caracteres"),
         company: z.string().trim().min(1).optional(),
+        inviteToken: z.string().optional(),
       })
       .parse(req.body);
     const exists = await pool.query("select 1 from users where email = $1", [b.email]);
     if (exists.rowCount) throw err(409, "EMAIL_JA_CADASTRADO");
+    if (b.inviteToken) await checkInvite(pool, b.inviteToken); // erro claro antes de criar a conta
     const uid = `usr_${randomUUID()}`;
-    const wid = `ws_${randomUUID()}`;
+    let wid = `ws_${randomUUID()}`;
     const c = await pool.connect();
     try {
       await c.query("begin");
       await c.query("insert into users (id, name, email, password_hash) values ($1,$2,$3,$4)", [uid, b.name, b.email, await hashPassword(b.password)]);
-      await c.query("insert into workspaces (id, name) values ($1,$2)", [wid, b.company ?? b.name]);
-      await c.query("insert into memberships (user_id, workspace_id) values ($1,$2)", [uid, wid]);
+      if (b.inviteToken) {
+        wid = await acceptInvite(c, b.inviteToken, uid); // entra na equipe de quem convidou
+      } else {
+        await c.query("insert into workspaces (id, name) values ($1,$2)", [wid, b.company ?? b.name]);
+        await c.query("insert into memberships (user_id, workspace_id) values ($1,$2)", [uid, wid]);
+      }
       await c.query("commit");
     } catch (e) {
       await c.query("rollback");
@@ -127,15 +147,16 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   });
 
   app.post("/api/auth/login", async (req, reply) => {
-    const b = z.object({ email: z.string().trim().toLowerCase(), password: z.string() }).parse(req.body);
+    const b = z.object({ email: z.string().trim().toLowerCase(), password: z.string(), inviteToken: z.string().optional() }).parse(req.body);
     const r = await pool.query(
       `select u.id, u.password_hash, m.workspace_id from users u join memberships m on m.user_id = u.id
        where u.email = $1 order by m.created_at limit 1`,
       [b.email],
     );
     if (!r.rowCount || !(await verifyPassword(b.password, r.rows[0].password_hash))) throw err(401, "EMAIL_OU_SENHA_INVALIDOS");
-    setSession(reply, r.rows[0].id, r.rows[0].workspace_id);
-    return me(r.rows[0].id, r.rows[0].workspace_id);
+    const wid = b.inviteToken ? await acceptInvite(pool, b.inviteToken, r.rows[0].id) : r.rows[0].workspace_id;
+    setSession(reply, r.rows[0].id, wid);
+    return me(r.rows[0].id, wid);
   });
 
   app.post("/api/auth/logout", async (_req, reply) => {
@@ -174,20 +195,37 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   app.get("/api/conversations", async (req) => {
     const { kind } = z.object({ kind: z.enum(["chat", "build"]).optional() }).parse(req.query);
     const r = await pool.query(
-      `select id, kind, title, artifact_version, updated_at from conversations
-       where workspace_id = $1 and user_id = $2 and ($3::text is null or kind = $3)
-       order by updated_at desc limit 100`,
+      `select c.id, c.kind, c.title, c.artifact_version, c.updated_at, c.expert_id, e.emoji as expert_emoji, e.name as expert_name
+       from conversations c left join experts e on e.id = c.expert_id
+       where c.workspace_id = $1 and c.user_id = $2 and ($3::text is null or c.kind = $3)
+       order by c.updated_at desc limit 100`,
       [req.session!.wid, req.session!.uid, kind ?? null],
     );
     return r.rows;
   });
 
   app.post("/api/conversations", async (req, reply) => {
-    const b = z.object({ kind: z.enum(["chat", "build"]), title: z.string().trim().min(1).max(120).optional() }).parse(req.body);
+    const b = z
+      .object({ kind: z.enum(["chat", "build"]), title: z.string().trim().min(1).max(120).optional(), expertId: z.string().optional() })
+      .parse(req.body);
+    let expert: { emoji: string; name: string } | null = null;
+    if (b.expertId) {
+      if (b.kind !== "chat") throw err(400, "ESPECIALISTA_SO_NO_CHAT");
+      const e = await pool.query("select emoji, name from experts where id = $1 and workspace_id = $2", [b.expertId, req.session!.wid]);
+      if (!e.rowCount) throw err(404, "ESPECIALISTA_NAO_ENCONTRADO");
+      expert = e.rows[0];
+    }
     const id = `cv_${randomUUID()}`;
     const title = b.title ?? (b.kind === "build" ? "Novo app" : "Nova conversa");
-    await pool.query("insert into conversations (id, workspace_id, user_id, kind, title) values ($1,$2,$3,$4,$5)", [id, req.session!.wid, req.session!.uid, b.kind, title]);
-    return reply.code(201).send({ id, kind: b.kind, title, artifact_version: 0 });
+    await pool.query("insert into conversations (id, workspace_id, user_id, kind, title, expert_id) values ($1,$2,$3,$4,$5,$6)", [
+      id,
+      req.session!.wid,
+      req.session!.uid,
+      b.kind,
+      title,
+      b.expertId ?? null,
+    ]);
+    return reply.code(201).send({ id, kind: b.kind, title, artifact_version: 0, expert_id: b.expertId ?? null, expert_emoji: expert?.emoji ?? null, expert_name: expert?.name ?? null });
   });
 
   app.get("/api/conversations/:id", async (req) => {
@@ -207,6 +245,7 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
       artifactHtml: c.artifact_html,
       artifactVersion: c.artifact_version,
       published: c.published_slug ? { slug: c.published_slug, version: c.published_version, at: c.published_at } : null,
+      expert: c.expert_id ? (await pool.query("select id, name, emoji, description from experts where id = $1", [c.expert_id])).rows[0] ?? null : null,
       messages: m.rows.map((r) => ({ ...r, attachments: byMsg.get(r.id) ?? [] })),
     };
   });
@@ -249,6 +288,10 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     const images = attachments.filter((a) => a.kind === "image");
     const historyChars = history.reduce((s, m) => s + (m.content as string).length, 0) + attText.length;
 
+    const expert = conv.expert_id ? await loadExpertContext(pool, conv.expert_id) : null;
+    if (expert && modelChoice === "auto" && expert.model !== "auto" && catalog.get(expert.model)) modelChoice = expert.model;
+    const knowledgeChars = expert?.knowledge.length ?? 0;
+
     let modelId: string;
     let reason: string;
     if (modelChoice === "auto") {
@@ -256,17 +299,17 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
         modelId = catalog.tierDefault.build;
         reason = "construção de app";
       } else {
-        const r = images.length ? { tier: "balanced" as const, reason: "pedido com imagem" } : routeTier(content, historyChars);
+        const r = images.length ? { tier: "balanced" as const, reason: "pedido com imagem" } : routeTier(content, historyChars + knowledgeChars);
         modelId = catalog.tierDefault[r.tier];
         reason = r.reason;
       }
     } else {
       if (!catalog.get(modelChoice)) throw err(400, "MODELO_DESCONHECIDO");
       modelId = modelChoice;
-      reason = "escolhido por você";
+      reason = expert && expert.model === modelChoice ? `padrão do especialista ${expert.name}` : "escolhido por você";
     }
 
-    const system = kind === "build" ? BUILDER_SYSTEM(conv.artifact_html) : CHAT_SYSTEM;
+    const system = kind === "build" ? BUILDER_SYSTEM(conv.artifact_html) : expert ? expertSystemPrompt(CHAT_SYSTEM, expert) : CHAT_SYSTEM;
     const userContent: ChatMsg["content"] = images.length
       ? [
           { type: "text", text: content + attText } as ContentPart,
@@ -539,12 +582,17 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   // ---------- Cobrança ----------
 
   app.post("/api/billing/checkout", async (req) => {
+    if (req.role !== "owner") throw err(403, "SOMENTE_DONO");
     const b = z.object({ planId: z.string() }).parse(req.body);
     return { url: await createPlanCheckout(d.billing(), req.session!.wid, b.planId) };
   });
 
   app.post("/api/billing/topup", async (req) => {
+    if (req.role !== "owner") throw err(403, "SOMENTE_DONO");
     const b = z.object({ credits: z.number().int() }).parse(req.body);
     return { url: await createTopupCheckout(d.billing(), req.session!.wid, b.credits) };
   });
+
+  await expertRoutes(app, { pool, catalog });
+  await teamRoutes(app, { pool, setSession });
 }

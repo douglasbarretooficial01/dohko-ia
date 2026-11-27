@@ -38,6 +38,7 @@ export function PlansModal({ me, onClose, onError }: { me: Me; onClose: () => vo
         <p className="muted">
           Preço em reais, cancele quando quiser. Créditos do plano acumulam por 2 meses. Todos os planos mantêm os créditos grátis diários.
         </p>
+        {me.role !== "owner" && <div className="notice credits" style={{ margin: "14px 0 0" }}><span>Só o dono do workspace pode assinar planos ou comprar créditos. Os créditos são compartilhados pela equipe.</span></div>}
         <div className="plans">
           {plans.map((p, i) => {
             const current = me.workspace.planId === p.id;
@@ -51,7 +52,7 @@ export function PlansModal({ me, onClose, onError }: { me: Me; onClose: () => vo
                 </div>
                 <div className="muted small">{fmt(p.monthlyCredits, 0)} créditos por mês</div>
                 <div className="muted small">{brl(p.priceBRL / p.monthlyCredits)} por crédito</div>
-                <button className={`btn block ${i === 1 ? "gold" : "primary"}`} disabled={current || busy !== null} onClick={() => go(p.id, () => api.checkout(p.id))}>
+                <button className={`btn block ${i === 1 ? "gold" : "primary"}`} disabled={current || busy !== null || me.role !== "owner"} onClick={() => go(p.id, () => api.checkout(p.id))}>
                   {current ? "Plano atual" : busy === p.id ? "Abrindo…" : "Assinar"}
                 </button>
               </div>
