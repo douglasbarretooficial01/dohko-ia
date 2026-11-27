@@ -6,6 +6,8 @@ import { PostgresRepo } from "../src/credits/pg-repo.js";
 import { migrate } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
 import { runMaintenance } from "../src/jobs.js";
+import { ModelCatalog } from "../src/llm/models.js";
+import { MockProvider } from "../src/llm/provider.js";
 
 const DB = process.env.TEST_DATABASE_URL;
 const KEY = "test-key-1234567890";
@@ -20,7 +22,7 @@ describe.skipIf(!DB)("API + Postgres", () => {
     webhooks: realStripe.webhooks,
     subscriptions: { retrieve: async (id: string) => ({ id, metadata: { workspace_id: "ws_api", plan_id: "pro_100" } }) },
   } as unknown as Stripe;
-  const app = buildApp({ pool, engine, apiKey: KEY, stripe: fakeStripe, stripeWebhookSecret: WH_SECRET });
+  const app = buildApp({ pool, engine, apiKey: KEY, stripe: fakeStripe, stripeWebhookSecret: WH_SECRET, catalog: new ModelCatalog(), provider: new MockProvider(0), sessionSecret: "s".repeat(40) });
   const h = { "x-api-key": KEY, "content-type": "application/json" };
   const post = (url: string, body: unknown) => app.inject({ method: "POST", url, headers: h, payload: JSON.stringify(body) });
   const balance = async (id = "ws_api") => (await app.inject({ method: "GET", url: `/workspaces/${id}/balance`, headers: h })).json();

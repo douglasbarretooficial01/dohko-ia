@@ -8,6 +8,12 @@ import { CreditEngine, InsufficientCreditsError } from "./credits/engine.js";
 import { WorkspaceNotFoundError } from "./credits/pg-repo.js";
 import { creditsFor, estimate, realCostBRL } from "./credits/pricing.js";
 import { createPlanCheckout, createTopupCheckout, handleStripeEvent, type BillingDeps } from "./billing/stripe.js";
+import cookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
+import { existsSync } from "node:fs";
+import type { ModelCatalog } from "./llm/models.js";
+import type { LLMProvider } from "./llm/provider.js";
+import { userRoutes } from "./routes/user.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -24,7 +30,16 @@ export interface AppDeps {
   stripePrices?: Record<string, string>;
   appUrl?: string;
   logger?: boolean;
+  catalog: ModelCatalog;
+  provider: LLMProvider;
+  sessionSecret: string;
+  secureCookies?: boolean;
+  /** Pasta do front compilado (web/dist). Se existir, é servida em "/". */
+  webDir?: string;
 }
+
+/** Rotas internas (agentes/serviços da Dohko) — exigem x-api-key. */
+const INTERNAL = ["/workspaces", "/actions", "/plans", "/billing/"];
 
 const Mode = z.enum(["chat", "plan", "build"]);
 const Call = z.object({
@@ -61,10 +76,12 @@ export function buildApp(d: AppDeps) {
     }
   });
 
-  // Autenticação por chave (uso interno: front/agente da Dohko → esta API)
+  app.register(cookie);
+
+  // Autenticação por chave nas rotas internas. As rotas /api usam sessão (cookie).
   const key = Buffer.from(d.apiKey);
   app.addHook("onRequest", async (req, reply) => {
-    if (req.url === "/health" || req.url.startsWith("/webhooks/")) return;
+    if (!INTERNAL.some((p) => req.url.startsWith(p))) return;
     const got = Buffer.from(String(req.headers["x-api-key"] ?? ""));
     if (got.length !== key.length || !timingSafeEqual(got, key)) return reply.code(401).send({ error: "NAO_AUTORIZADO" });
   });
@@ -179,6 +196,32 @@ export function buildApp(d: AppDeps) {
     if (!d.stripe) throw Object.assign(new Error("STRIPE_NAO_CONFIGURADO"), { statusCode: 503 });
     return { stripe: d.stripe, pool: d.pool, engine: d.engine, prices: d.stripePrices ?? {}, appUrl: d.appUrl ?? "" };
   };
+
+  // ---------- App do usuário (/api) ----------
+
+  app.register(async (scope) =>
+    userRoutes(scope, {
+      pool: d.pool,
+      engine: d.engine,
+      catalog: d.catalog,
+      provider: d.provider,
+      sessionSecret: d.sessionSecret,
+      secureCookies: d.secureCookies ?? false,
+      billing,
+    }),
+  );
+
+  // ---------- Front (SPA) ----------
+
+  if (d.webDir && existsSync(d.webDir)) {
+    app.register(fastifyStatic, { root: d.webDir, wildcard: false });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.method === "GET" && !req.url.startsWith("/api/") && !INTERNAL.some((p) => req.url.startsWith(p))) {
+        return reply.sendFile("index.html");
+      }
+      return reply.code(404).send({ error: "NAO_ENCONTRADO" });
+    });
+  }
 
   app.post("/billing/checkout", async (req) => {
     const b = z.object({ workspaceId: z.string(), planId: z.string() }).parse(req.body);

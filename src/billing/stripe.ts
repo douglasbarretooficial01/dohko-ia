@@ -34,8 +34,8 @@ export async function createPlanCheckout(d: BillingDeps, workspaceId: string, pl
     line_items: [{ price, quantity: 1 }],
     subscription_data: { metadata: meta },
     metadata: meta,
-    success_url: `${d.appUrl}/billing/sucesso?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${d.appUrl}/billing/cancelado`,
+    success_url: `${d.appUrl}/?pagamento=sucesso`,
+    cancel_url: `${d.appUrl}/?pagamento=cancelado`,
   });
   return s.url;
 }
@@ -61,8 +61,8 @@ export async function createTopupCheckout(d: BillingDeps, workspaceId: string, c
       },
     ],
     metadata: { workspace_id: workspaceId, kind: "topup", credits: String(credits) },
-    success_url: `${d.appUrl}/billing/sucesso?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${d.appUrl}/billing/cancelado`,
+    success_url: `${d.appUrl}/?pagamento=sucesso`,
+    cancel_url: `${d.appUrl}/?pagamento=cancelado`,
   });
   return s.url;
 }

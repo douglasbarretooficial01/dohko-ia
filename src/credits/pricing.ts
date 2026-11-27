@@ -11,6 +11,10 @@ export const round2 = (n: number) => Math.round(n * 100) / 100;
 export function realCostBRL(ev: UsageEvent): number {
   let usd = ev.toolCostsUSD ?? 0;
   for (const c of ev.calls) {
+    if (c.costUSD != null) {
+      usd += c.costUSD;
+      continue;
+    }
     const p = MODEL_COST_USD_PER_MTOK[c.model];
     if (!p) throw new Error(`MODELO_SEM_PRECO: ${c.model}`);
     const cached = Math.min(c.cachedInputTokens ?? 0, c.inputTokens);

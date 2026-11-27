@@ -16,6 +16,8 @@ export interface ModelCall {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
+  /** Custo real informado pelo provedor (US$). Quando presente, substitui a tabela de preços. */
+  costUSD?: number;
 }
 
 export interface UsageEvent {
