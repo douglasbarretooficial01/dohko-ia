@@ -7,26 +7,32 @@ import { createPool } from "./pool.js";
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../migrations");
 
 /** Aplica, em ordem, as migrations ainda não aplicadas. Cada uma numa transação. */
+const LOCK_ID = 74_210_001; // trava para dois processos não migrarem ao mesmo tempo
+
 export async function migrate(pool: pg.Pool, log = console.log) {
-  await pool.query(`create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())`);
-  const done = new Set((await pool.query("select name from schema_migrations")).rows.map((r) => r.name));
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
-  for (const f of files) {
-    if (done.has(f)) continue;
-    const sql = await readFile(join(MIGRATIONS_DIR, f), "utf8");
-    const c = await pool.connect();
-    try {
-      await c.query("begin");
-      await c.query(sql);
-      await c.query("insert into schema_migrations(name) values ($1)", [f]);
-      await c.query("commit");
-      log(`migration aplicada: ${f}`);
-    } catch (e) {
-      await c.query("rollback");
-      throw e;
-    } finally {
-      c.release();
+  const c = await pool.connect();
+  try {
+    await c.query("select pg_advisory_lock($1)", [LOCK_ID]);
+    await c.query(`create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())`);
+    const done = new Set((await c.query("select name from schema_migrations")).rows.map((r) => r.name));
+    const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+    for (const f of files) {
+      if (done.has(f)) continue;
+      const sql = await readFile(join(MIGRATIONS_DIR, f), "utf8");
+      try {
+        await c.query("begin");
+        await c.query(sql);
+        await c.query("insert into schema_migrations(name) values ($1)", [f]);
+        await c.query("commit");
+        log(`migration aplicada: ${f}`);
+      } catch (e) {
+        await c.query("rollback");
+        throw new Error(`Falha na migration ${f}: ${(e as Error).message}`, { cause: e });
+      }
     }
+  } finally {
+    await c.query("select pg_advisory_unlock($1)", [LOCK_ID]).catch(() => {});
+    c.release();
   }
 }
 

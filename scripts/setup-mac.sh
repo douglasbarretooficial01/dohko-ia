@@ -14,7 +14,21 @@ if [ ! -f .env ]; then
 fi
 docker compose up -d --build
 printf "Aguardando a API"
-until curl -fs localhost:3000/health >/dev/null 2>&1; do printf "."; sleep 2; done
+i=0
+until curl -fs localhost:3000/health >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -gt 60 ]; then
+    echo ""
+    echo "A API não respondeu em 2 minutos. Últimas linhas do log:"
+    echo "----------------------------------------------------------"
+    docker compose logs api --tail 40
+    echo "----------------------------------------------------------"
+    echo "Mande este log para análise. Para tentar de novo: sh scripts/setup-mac.sh"
+    exit 1
+  fi
+  printf "."
+  sleep 2
+done
 echo ""
 echo "Dohko IA rodando em http://localhost:3000"
 open http://localhost:3000 2>/dev/null || true
