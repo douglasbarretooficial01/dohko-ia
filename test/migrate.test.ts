@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { migrate } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
@@ -14,7 +16,7 @@ describe.skipIf(!DB)("migrations", () => {
     await Promise.all(pools.map((p) => migrate(p, () => {})));
     await Promise.all(pools.map((p) => p.end()));
     const r = await pool.query("select count(*)::int as n from schema_migrations");
-    expect(r.rows[0].n).toBe(2);
+    expect(r.rows[0].n).toBe(readdirSync(join(import.meta.dirname, "../migrations")).filter((f) => f.endsWith(".sql")).length);
   });
 
   it("rodar de novo não faz nada", async () => {

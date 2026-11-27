@@ -9,6 +9,7 @@ import { WorkspaceNotFoundError } from "./credits/pg-repo.js";
 import { creditsFor, estimate, realCostBRL } from "./credits/pricing.js";
 import { createPlanCheckout, createTopupCheckout, handleStripeEvent, type BillingDeps } from "./billing/stripe.js";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import type { ModelCatalog } from "./llm/models.js";
@@ -36,6 +37,7 @@ export interface AppDeps {
   secureCookies?: boolean;
   /** Pasta do front compilado (web/dist). Se existir, é servida em "/". */
   webDir?: string;
+  adminEmails?: string[];
 }
 
 /** Rotas internas (agentes/serviços da Dohko) — exigem x-api-key. */
@@ -199,8 +201,9 @@ export function buildApp(d: AppDeps) {
 
   // ---------- App do usuário (/api) ----------
 
-  app.register(async (scope) =>
-    userRoutes(scope, {
+  app.register(async (scope) => {
+    await scope.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    await userRoutes(scope, {
       pool: d.pool,
       engine: d.engine,
       catalog: d.catalog,
@@ -208,8 +211,29 @@ export function buildApp(d: AppDeps) {
       sessionSecret: d.sessionSecret,
       secureCookies: d.secureCookies ?? false,
       billing,
-    }),
-  );
+      adminEmails: d.adminEmails,
+    });
+  });
+
+  // ---------- Apps publicados (públicos) ----------
+  // Servidos com CSP "sandbox": o app roda numa origem isolada, sem acesso à sessão
+  // nem às rotas /api de quem estiver logado na Dohko.
+
+  app.get("/p/:slug", async (req, reply) => {
+    const { slug } = z.object({ slug: z.string().max(80) }).parse(req.params);
+    const r = await d.pool.query("select published_html from conversations where published_slug = $1", [slug]);
+    reply
+      .header("content-security-policy", "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads")
+      .header("x-content-type-options", "nosniff")
+      .header("referrer-policy", "no-referrer")
+      .type("text/html; charset=utf-8");
+    if (!r.rowCount || !r.rows[0].published_html) {
+      return reply
+        .code(404)
+        .send(`<!DOCTYPE html><meta charset="utf-8"><title>App não encontrado</title><body style="font-family:system-ui;background:#0b0d12;color:#e8eaf0;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>App não encontrado</h1><p>Este link não existe ou foi despublicado.</p><a style="color:#f5b301" href="/">Criar o seu com a Dohko IA</a></div>`);
+    }
+    return reply.header("cache-control", "public, max-age=60").send(r.rows[0].published_html);
+  });
 
   // ---------- Front (SPA) ----------
 

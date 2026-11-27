@@ -4,7 +4,10 @@ A IA de trabalho da Dohko Technology:
 
 - **Chat multimodelo**: GPT, Claude e Gemini num só lugar. O **Dohko One** escolhe o modelo certo para cada pedido (rápido e barato para o simples, forte para análise e código).
 - **Construtor de apps**: a pessoa descreve um app e recebe um app web funcionando, com prévia ao vivo (computador e celular), versões, código e download.
+- **Publicar com um clique**: o app ganha um link público (`/p/nome-do-app`) que qualquer pessoa abre. Editar o app não muda o que está no ar até você clicar em "Atualizar".
+- **Anexos no chat**: PDF, Word (.docx), CSV, TXT, Markdown, JSON e imagens (PNG, JPG, WebP). Arraste para o chat, cole uma imagem ou use o 📎.
 - **Créditos em reais**: o custo estimado aparece antes de enviar; a cobrança é pelo custo real, com margem; créditos grátis diários, planos e recargas pelo Stripe.
+- **Painel de uso e margem** (para administradores): receita, custo real de IA, margem por modelo e por dia, usuários e assinaturas.
 
 Stack: Node 22 + TypeScript + Fastify + Postgres 16 + React (Vite), tudo num Docker Compose. O mesmo comando roda no MacBook e na VPS.
 
@@ -22,6 +25,18 @@ cd ~/dohko-ia
 O script abre o OrbStack, cria o `.env` com chaves novas, sobe o banco e a API, e abre **http://localhost:3000** no navegador. Crie sua conta e use.
 
 Sem chave de IA, o sistema roda em **modo simulado**: respostas e apps de exemplo, sem custo, bons para testar a interface e os créditos.
+
+### Atualizar para a última versão
+
+```bash
+cd ~/dohko-ia && sh scripts/update-mac.sh
+```
+
+Baixa a versão mais nova do GitHub, mantém o seu `.env` e o banco, recompila e reinicia.
+
+### Painel de administração
+
+No `.env`, coloque seu e-mail em `ADMIN_EMAILS=voce@empresa.com` (vários separados por vírgula) e rode `docker compose up -d`. O link **📊 Painel de uso e margem** aparece no menu lateral.
 
 ### Ligar a IA de verdade
 
@@ -91,6 +106,7 @@ No `.env` da VPS, defina:
 | `APP_URL` | `https://ia.dohko.com.br` |
 | `DOMAIN` | `ia.dohko.com.br` |
 | `OPENROUTER_API_KEY` | sua chave |
+| `ADMIN_EMAILS` | e-mails com acesso ao painel |
 | `STRIPE_*` | chaves **live** e o segredo do endpoint `https://ia.dohko.com.br/webhooks/stripe` (eventos `invoice.paid`, `checkout.session.completed`, `customer.subscription.deleted`) |
 
 ```bash
@@ -129,7 +145,8 @@ O Caddy emite o HTTPS sozinho. O banco e a API ficam presos ao `127.0.0.1`, e s�
 ```
 web/                 interface (React + Vite), servida pela própria API em produção
 src/
-  routes/user.ts     /api: conta, conversas, chat em streaming, construtor, cobrança
+  routes/user.ts     /api: conta, conversas, chat em streaming, construtor, anexos, publicação, painel, cobrança
+  uploads.ts         leitura de PDF, Word, CSV, texto e imagens
   llm/               catálogo de modelos, Dohko One, OpenRouter, modo simulado, prompts
   credits/           motor de créditos (preço, reserva, cobrança, ledger)
   billing/           Stripe (checkout, recarga, webhooks)
@@ -140,5 +157,7 @@ test/                unitários + integração com Postgres + provedor
 ```
 
 **Fluxo de uma mensagem:** estimativa de custo (mostrada ao digitar) → reserva de créditos (bloqueia com aviso se faltar saldo) → resposta em streaming → cobrança do custo real informado pelo provedor → devolução do que sobrou da reserva. Se o modelo falhar sem responder, nada é cobrado.
+
+**Segurança dos apps publicados:** a página `/p/...` é servida com `Content-Security-Policy: sandbox`, ou seja, numa origem isolada. Um app publicado não consegue usar a sessão nem chamar a API de quem está logado na Dohko.
 
 **Rotas internas** (`/workspaces`, `/actions`, `/plans`, `/billing/*`) continuam disponíveis com o header `x-api-key`, para outros serviços da Dohko usarem o motor de créditos.

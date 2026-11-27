@@ -12,6 +12,7 @@ export interface Plan {
 }
 export interface Me {
   user: { id: string; name: string; email: string };
+  isAdmin?: boolean;
   workspace: { id: string; name: string; planId: string; plan?: Plan };
   balance: Balance;
 }
@@ -29,12 +30,28 @@ export interface ConvSummary {
   artifact_version: number;
   updated_at: string;
 }
+export interface AttachmentRef {
+  id: string;
+  name: string;
+  kind: "text" | "image";
+}
+export interface UploadedFile extends AttachmentRef {
+  size: number;
+  chars: number;
+  truncated: boolean;
+}
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   model?: string | null;
   credits?: number | null;
+  attachments?: AttachmentRef[];
+}
+export interface Published {
+  slug: string;
+  version: number;
+  at: string;
 }
 export interface Conversation {
   id: string;
@@ -42,7 +59,29 @@ export interface Conversation {
   title: string;
   artifactHtml: string | null;
   artifactVersion: number;
+  published: Published | null;
   messages: Message[];
+}
+
+export interface AdminStats {
+  days: number;
+  creditValueBRL: number;
+  totals: {
+    actions: number;
+    credits: number;
+    creditsPaid: number;
+    creditsFree: number;
+    revenueNominalBRL: number;
+    costBRL: number;
+    grossMargin: number | null;
+    writeoffCredits: number;
+    activeWorkspaces: number;
+  };
+  users: { total: number; new: number };
+  plans: { planId: string; name: string; workspaces: number }[];
+  mrrBRL: number;
+  byModel: { mode: string; model: string; actions: number; input_tokens: number; output_tokens: number; credits: number; cost: number; margin: number | null }[];
+  byDay: { day: string; actions: number; credits: number; cost: number }[];
 }
 
 export class ApiError extends Error {
@@ -75,8 +114,19 @@ export const api = {
   conversation: (id: string) => req<Conversation>("GET", `/api/conversations/${id}`),
   rename: (id: string, title: string) => req("PATCH", `/api/conversations/${id}`, { title }),
   remove: (id: string) => req("DELETE", `/api/conversations/${id}`),
-  estimate: (conversationId: string, content: string, model: string) =>
-    req<{ model: { id: string; label: string }; reason: string; expected: number }>("POST", "/api/estimate", { conversationId, content, model }),
+  estimate: (conversationId: string, content: string, model: string, attachmentIds: string[] = []) =>
+    req<{ model: { id: string; label: string }; reason: string; expected: number }>("POST", "/api/estimate", { conversationId, content, model, attachmentIds }),
+  publish: (id: string) => req<{ slug: string; url: string; version: number }>("POST", `/api/conversations/${id}/publish`),
+  unpublish: (id: string) => req("DELETE", `/api/conversations/${id}/publish`),
+  adminStats: (days: number) => req<AdminStats>("GET", `/api/admin/stats?days=${days}`),
+  upload: async (file: File): Promise<UploadedFile> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/uploads", { method: "POST", body: fd, credentials: "same-origin" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new ApiError(r.status, data.error ?? "ERRO", data);
+    return data;
+  },
   checkout: (planId: string) => req<{ url: string }>("POST", "/api/billing/checkout", { planId }),
   topup: (credits: number) => req<{ url: string }>("POST", "/api/billing/topup", { credits }),
 };
@@ -89,12 +139,12 @@ export interface StreamHandlers {
 }
 
 /** Envia a mensagem e lê a resposta em streaming (SSE sobre fetch). */
-export async function sendMessage(convId: string, content: string, model: string, h: StreamHandlers, signal?: AbortSignal) {
+export async function sendMessage(convId: string, content: string, model: string, h: StreamHandlers, signal?: AbortSignal, attachmentIds: string[] = []) {
   const r = await fetch(`/api/conversations/${convId}/messages`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content, model }),
+    body: JSON.stringify({ content, model, attachmentIds }),
     signal,
   });
   if (!r.ok || !r.body) {

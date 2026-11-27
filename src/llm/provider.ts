@@ -1,7 +1,20 @@
+export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
+
+/** Texto de uma mensagem (ignora imagens). */
+export const msgText = (m: ChatMsg) =>
+  typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join("\n");
+
+/** Estimativa de tokens de entrada de uma conversa (texto + ~1.200 por imagem). */
+export const approxInputTokens = (msgs: ChatMsg[]) =>
+  msgs.reduce(
+    (s, m) => s + approxTokens(msgText(m)) + (typeof m.content === "string" ? 0 : m.content.filter((p) => p.type === "image_url").length * 1_200),
+    0,
+  );
 
 export interface StreamResult {
   inputTokens: number;
@@ -99,7 +112,7 @@ export class OpenRouterProvider implements LLMProvider {
     }
     return (
       usage ?? {
-        inputTokens: approxTokens(opts.messages.map((m) => m.content).join("\n")),
+        inputTokens: approxInputTokens(opts.messages),
         outputTokens: approxTokens(output),
       }
     );
@@ -116,19 +129,23 @@ export class MockProvider implements LLMProvider {
   constructor(private delayMs = 15) {}
 
   async stream(opts: StreamOptions, onDelta: (t: string) => void): Promise<StreamResult> {
-    const last = opts.messages.filter((m) => m.role === "user").at(-1)?.content ?? "";
-    const isBuild = opts.messages.some((m) => m.role === "system" && m.content.includes("[DOHKO_BUILDER]"));
-    const text = isBuild ? mockApp(last) : mockAnswer(last, opts.model);
+    const lastMsg = opts.messages.filter((m) => m.role === "user").at(-1);
+    const last = lastMsg ? msgText(lastMsg) : "";
+    const images = lastMsg && typeof lastMsg.content !== "string" ? lastMsg.content.filter((p) => p.type === "image_url").length : 0;
+    const files = [...last.matchAll(/<arquivo nome="([^"]+)"/g)].map((m) => m[1]);
+    const isBuild = opts.messages.some((m) => m.role === "system" && msgText(m).includes("[DOHKO_BUILDER]"));
+    const question = last.replace(/<arquivo[\s\S]*?<\/arquivo>/g, "").trim();
+    let text = isBuild ? mockApp(question) : mockAnswer(question, opts.model);
+    if (!isBuild && (files.length || images)) {
+      text += `\n\nRecebi ${files.length ? `os arquivos: ${files.join(", ")}` : ""}${files.length && images ? " e " : ""}${images ? `${images} imagem(ns)` : ""}.`;
+    }
     const parts = text.match(/[\s\S]{1,24}/g) ?? [];
     for (const p of parts) {
       if (opts.signal?.aborted) break;
       onDelta(p);
       if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     }
-    return {
-      inputTokens: approxTokens(opts.messages.map((m) => m.content).join("\n")),
-      outputTokens: approxTokens(text),
-    };
+    return { inputTokens: approxInputTokens(opts.messages), outputTokens: approxTokens(text) };
   }
 }
 

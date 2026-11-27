@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { api, ApiError, fmt, sendMessage, type Balance, type Conversation, type Message } from "../api";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { api, ApiError, fmt, sendMessage, type Balance, type Conversation, type Message, type Published, type UploadedFile } from "../api";
 import type { ModelsData } from "../App";
 import { Markdown } from "./Markdown";
 import { ModelPicker } from "./ModelPicker";
@@ -13,6 +13,16 @@ interface Props {
   onActivity: () => void;
   onNeedCredits: () => void;
 }
+
+type PendingFile = (UploadedFile & { uploading?: false }) | { id: string; name: string; kind: "text" | "image"; uploading: true; preview?: string };
+
+const ACCEPT = ".pdf,.docx,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.webp,.gif";
+const UPLOAD_ERRORS: Record<string, string> = {
+  ARQUIVO_MAIOR_QUE_10MB: "passa de 10 MB",
+  IMAGEM_MAIOR_QUE_5MB: "imagem passa de 5 MB",
+  PDF_ILEGIVEL: "PDF ilegível",
+  DOCX_ILEGIVEL: "arquivo Word ilegível",
+};
 
 interface LiveMessage extends Message {
   streaming?: boolean;
@@ -43,6 +53,10 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
   const [notice, setNotice] = useState<{ kind: "credits" | "error"; text: string } | null>(null);
   const [html, setHtml] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const [published, setPublished] = useState<Published | null>(null);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -53,6 +67,7 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
       setMessages(c.messages);
       setHtml(c.artifactHtml);
       setVersion(c.artifactVersion);
+      setPublished(c.published);
     });
     return () => abortRef.current?.abort();
   }, [convId]);
@@ -61,17 +76,51 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
+  const readyIds = files.filter((f) => !f.uploading).map((f) => f.id);
+  const readyKey = readyIds.join(",");
+
   // estimativa de custo enquanto digita (custo visível antes de enviar)
   useEffect(() => {
     if (!conv) return;
     const t = setTimeout(() => {
       api
-        .estimate(convId, input, model)
+        .estimate(convId, input, model, readyKey ? readyKey.split(",") : [])
         .then((e) => setEstimate({ label: e.model.label, expected: e.expected, reason: e.reason }))
         .catch(() => setEstimate(null));
     }, 350);
     return () => clearTimeout(t);
-  }, [input, model, conv, convId]);
+  }, [input, model, conv, convId, readyKey]);
+
+  const addFiles = async (list: FileList | File[]) => {
+    const arr = Array.from(list).slice(0, Math.max(0, 5 - files.length));
+    for (const file of arr) {
+      const tempId = `up-${Math.random().toString(36).slice(2)}`;
+      const isImg = file.type.startsWith("image/");
+      setFiles((fs) => [...fs, { id: tempId, name: file.name, kind: isImg ? "image" : "text", uploading: true, preview: isImg ? URL.createObjectURL(file) : undefined }]);
+      try {
+        const up = await api.upload(file);
+        setFiles((fs) => fs.map((f) => (f.id === tempId ? up : f)));
+      } catch (e) {
+        setFiles((fs) => fs.filter((f) => f.id !== tempId));
+        const code = e instanceof ApiError ? e.code.split(" ")[0] : "";
+        setNotice({ kind: "error", text: `Não foi possível anexar "${file.name}": ${UPLOAD_ERRORS[code] ?? (e instanceof ApiError ? e.code.replace(/_/g, " ").toLowerCase() : "erro de conexão")}.` });
+      }
+    }
+  };
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (imgs.length) {
+      e.preventDefault();
+      addFiles(imgs);
+    }
+  };
 
   const chooseModel = (m: string) => {
     setModel(m);
@@ -80,12 +129,14 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
 
   const send = async (text?: string) => {
     const content = (text ?? input).trim();
-    if (!content || busy || !conv) return;
+    if (!content || busy || !conv || files.some((f) => f.uploading)) return;
+    const sentFiles = files.filter((f): f is UploadedFile => !f.uploading);
+    setFiles([]);
     setInput("");
     setNotice(null);
     setBusy(true);
     const isFirst = messages.length === 0;
-    const tempUser: LiveMessage = { id: `tmp-u-${Date.now()}`, role: "user", content };
+    const tempUser: LiveMessage = { id: `tmp-u-${Date.now()}`, role: "user", content, attachments: sentFiles.map(({ id, name, kind }) => ({ id, name, kind })) };
     const tempAsst: LiveMessage = { id: `tmp-a-${Date.now()}`, role: "assistant", content: "", streaming: true };
     setMessages((m) => [...m, tempUser, tempAsst]);
     const patch = (fn: (m: LiveMessage) => LiveMessage) => setMessages((ms) => ms.map((m) => (m.id === tempAsst.id ? fn(m) : m)));
@@ -116,12 +167,14 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
           },
         },
         ac.signal,
+        sentFiles.map((f) => f.id),
       );
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id !== tempAsst.id || m.content));
       if (e instanceof ApiError && e.status === 402) {
         setMessages((ms) => ms.filter((m) => m.id !== tempUser.id));
         setInput(content);
+        setFiles(sentFiles);
         setNotice({
           kind: "credits",
           text: `Créditos insuficientes: este pedido deve custar cerca de ${fmt(e.data.needed)} e você tem ${fmt(e.data.available)}.`,
@@ -149,7 +202,16 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
   const suggestions = isBuild ? BUILD_SUGGESTIONS : CHAT_SUGGESTIONS;
 
   const chat = (
-    <section className="chat">
+    <section
+      className={`chat ${dragging ? "dragging" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)}
+      onDrop={onDrop}
+    >
+      {dragging && <div className="drop-hint">Solte os arquivos para anexar</div>}
       <header className="chat-head">
         <h2 className="chat-title">{isBuild ? "⚡ " : ""}{messages.length ? conv.title : isBuild ? "Novo app" : "Nova conversa"}</h2>
         <ModelPicker models={models} value={model} onChange={chooseModel} />
@@ -181,7 +243,20 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
                 )}
               </>
             ) : (
-              <div className="bubble">{m.content}</div>
+              <>
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className="msg-files">
+                    {m.attachments.map((a) =>
+                      a.kind === "image" ? (
+                        <img key={a.id} className="msg-img" src={`/api/attachments/${a.id}`} alt={a.name} title={a.name} />
+                      ) : (
+                        <span key={a.id} className="file-chip">📄 {a.name}</span>
+                      ),
+                    )}
+                  </div>
+                )}
+                <div className="bubble">{m.content}</div>
+              </>
             )}
           </div>
         ))}
@@ -197,7 +272,32 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
       )}
 
       <div className="composer">
+        {files.length > 0 && (
+          <div className="pending-files">
+            {files.map((f) => (
+              <span key={f.id} className={`file-chip ${f.uploading ? "loading" : ""}`} title={!f.uploading && f.truncated ? "Arquivo grande: só o começo será lido" : f.name}>
+                {f.kind === "image" ? "🖼" : "📄"} {f.name}
+                {f.uploading ? " · enviando…" : !f.uploading && f.truncated ? " · cortado" : ""}
+                {!f.uploading && (
+                  <button className="chip-x" onClick={() => setFiles((fs) => fs.filter((x) => x.id !== f.id))} aria-label="Remover">×</button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept={ACCEPT}
+          hidden
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
         <textarea
+          onPaste={onPaste}
           ref={taRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -207,6 +307,9 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
           autoFocus
         />
         <div className="composer-bar">
+          <button className="attach-btn" onClick={() => fileRef.current?.click()} title="Anexar PDF, Word, planilha CSV, texto ou imagem" disabled={files.length >= 5}>
+            📎
+          </button>
           <span className="estimate small muted" title="Custo estimado antes de enviar. Você paga o custo real, que costuma ser menor.">
             {estimate ? (
               <>
@@ -220,7 +323,7 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
           {busy ? (
             <button className="btn ghost sm" onClick={() => abortRef.current?.abort()}>■ Parar</button>
           ) : (
-            <button className="btn primary sm" disabled={!input.trim()} onClick={() => send()}>Enviar ↵</button>
+            <button className="btn primary sm" disabled={!input.trim() || files.some((f) => f.uploading)} onClick={() => send()}>Enviar ↵</button>
           )}
         </div>
       </div>
@@ -231,7 +334,7 @@ export function Workspace({ convId, models, onBalance, onTitle, onActivity, onNe
   return (
     <div className="build-split">
       {chat}
-      <Preview html={html} version={version} title={conv.title} building={busy} />
+      <Preview convId={convId} html={html} version={version} title={conv.title} building={busy} published={published} onPublished={setPublished} />
     </div>
   );
 }

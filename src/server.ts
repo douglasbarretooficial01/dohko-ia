@@ -37,6 +37,7 @@ const app = buildApp({
   provider,
   sessionSecret: env.SESSION_SECRET,
   secureCookies: env.APP_URL.startsWith("https://"),
+  adminEmails: env.ADMIN_EMAILS.split(","),
   webDir: join(dirname(fileURLToPath(import.meta.url)), "../web/dist"),
 });
 

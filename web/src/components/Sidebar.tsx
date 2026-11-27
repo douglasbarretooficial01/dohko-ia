@@ -10,9 +10,10 @@ interface Props {
   onDelete: (id: string) => void;
   onPlans: () => void;
   onLogout: () => void;
+  onAdmin: () => void;
 }
 
-export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlans, onLogout }: Props) {
+export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlans, onLogout, onAdmin }: Props) {
   const chats = convs.filter((c) => c.kind === "chat");
   const apps = convs.filter((c) => c.kind === "build");
   const b = me.balance;
@@ -57,6 +58,9 @@ export function Sidebar({ me, convs, activeId, onSelect, onNew, onDelete, onPlan
         {chats.map((c) => <Item key={c.id} c={c} />)}
       </div>
 
+      {me.isAdmin && (
+        <button className="admin-link" onClick={onAdmin}>📊 Painel de uso e margem</button>
+      )}
       <div className="credit-card">
         <div className="credit-head">
           <span className="muted small">Créditos</span>

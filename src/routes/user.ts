@@ -10,7 +10,9 @@ import { InsufficientCreditsError } from "../credits/engine.js";
 import { ceil2, creditsFor, realCostBRL } from "../credits/pricing.js";
 import type { ModelCatalog } from "../llm/models.js";
 import { BUILDER_SYSTEM, CHAT_SYSTEM, extractHtml, stripHtmlBlock } from "../llm/prompts.js";
-import { approxTokens, type ChatMsg, type LLMProvider } from "../llm/provider.js";
+import { approxInputTokens, approxTokens, type ChatMsg, type ContentPart, type LLMProvider } from "../llm/provider.js";
+import { CONFIG } from "../credits/config.js";
+import { attachmentBlock, extract, slugify, UploadError } from "../uploads.js";
 import { routeTier } from "../llm/router.js";
 
 declare module "fastify" {
@@ -27,6 +29,18 @@ export interface UserRoutesDeps {
   sessionSecret: string;
   secureCookies: boolean;
   billing: () => BillingDeps;
+  adminEmails?: string[];
+}
+
+interface AttachmentRow {
+  id: string;
+  name: string;
+  mime: string;
+  kind: "text" | "image";
+  text_content: string | null;
+  data: Buffer | null;
+  truncated: boolean;
+  message_id?: string | null;
 }
 
 const COOKIE = "dohko_session";
@@ -42,6 +56,8 @@ const err = (statusCode: number, message: string) => Object.assign(new Error(mes
 
 export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   const { pool, engine, catalog } = d;
+  const admins = new Set((d.adminEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean));
+  const isAdmin = (email: string) => admins.has(email.toLowerCase());
 
   const setSession = (reply: FastifyReply, uid: string, wid: string) =>
     reply.setCookie(COOKIE, signSession({ uid, wid }, d.sessionSecret), {
@@ -72,6 +88,7 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     const x = r.rows[0];
     return {
       user: { id: x.id, name: x.name, email: x.email },
+      isAdmin: isAdmin(x.email),
       workspace: { id: x.wid, name: x.wname, planId: x.plan_id, plan: PLANS[x.plan_id] },
       balance: await engine.balance(wid),
     };
@@ -177,7 +194,21 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const c = await loadConv(req, id);
     const m = await pool.query("select id, role, content, model, credits, created_at from messages where conversation_id = $1 order by created_at", [id]);
-    return { id: c.id, kind: c.kind, title: c.title, artifactHtml: c.artifact_html, artifactVersion: c.artifact_version, messages: m.rows };
+    const att = await pool.query(
+      `select a.id, a.name, a.kind, a.message_id from attachments a join messages m on m.id = a.message_id where m.conversation_id = $1 order by a.created_at`,
+      [id],
+    );
+    const byMsg = new Map<string, { id: string; name: string; kind: string }[]>();
+    for (const a of att.rows) byMsg.set(a.message_id, [...(byMsg.get(a.message_id) ?? []), { id: a.id, name: a.name, kind: a.kind }]);
+    return {
+      id: c.id,
+      kind: c.kind,
+      title: c.title,
+      artifactHtml: c.artifact_html,
+      artifactVersion: c.artifact_version,
+      published: c.published_slug ? { slug: c.published_slug, version: c.published_version, at: c.published_at } : null,
+      messages: m.rows.map((r) => ({ ...r, attachments: byMsg.get(r.id) ?? [] })),
+    };
   });
 
   app.patch("/api/conversations/:id", async (req) => {
@@ -197,13 +228,26 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
 
   // ---------- Montagem do pedido ao modelo ----------
 
-  const buildTurn = async (conv: any, content: string, modelChoice: string) => {
+  const buildTurn = async (conv: any, content: string, modelChoice: string, attachments: AttachmentRow[] = []) => {
     const kind: Kind = conv.kind;
     const hist = await pool.query(
-      `select role, content from (select role, content, created_at from messages where conversation_id = $1 order by created_at desc limit $2) t order by created_at`,
+      `select id, role, content from (select id, role, content, created_at from messages where conversation_id = $1 order by created_at desc limit $2) t order by created_at`,
       [conv.id, HISTORY_LIMIT],
     );
-    const historyChars = hist.rows.reduce((s, m) => s + m.content.length, 0);
+    // anexos de mensagens anteriores entram como texto (imagens viram uma nota)
+    const histAtt = hist.rowCount
+      ? (await pool.query("select message_id, name, kind, text_content, truncated from attachments where message_id = any($1)", [hist.rows.map((r) => r.id)])).rows
+      : [];
+    const history: ChatMsg[] = hist.rows.map((r) => {
+      const extra = histAtt
+        .filter((a) => a.message_id === r.id)
+        .map((a) => (a.kind === "text" ? attachmentBlock(a) : `\n\n[imagem enviada antes: ${a.name}]`))
+        .join("");
+      return { role: r.role, content: r.content + extra };
+    });
+    const attText = attachments.filter((a) => a.kind === "text").map(attachmentBlock).join("");
+    const images = attachments.filter((a) => a.kind === "image");
+    const historyChars = history.reduce((s, m) => s + (m.content as string).length, 0) + attText.length;
 
     let modelId: string;
     let reason: string;
@@ -212,7 +256,7 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
         modelId = catalog.tierDefault.build;
         reason = "construção de app";
       } else {
-        const r = routeTier(content, historyChars);
+        const r = images.length ? { tier: "balanced" as const, reason: "pedido com imagem" } : routeTier(content, historyChars);
         modelId = catalog.tierDefault[r.tier];
         reason = r.reason;
       }
@@ -223,17 +267,36 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     }
 
     const system = kind === "build" ? BUILDER_SYSTEM(conv.artifact_html) : CHAT_SYSTEM;
-    const messages: ChatMsg[] = [{ role: "system", content: system }, ...hist.rows, { role: "user", content }];
-    const inputTokens = approxTokens(messages.map((m) => m.content).join("\n"));
+    const userContent: ChatMsg["content"] = images.length
+      ? [
+          { type: "text", text: content + attText } as ContentPart,
+          ...images.map((a) => ({ type: "image_url", image_url: { url: `data:${a.mime};base64,${a.data!.toString("base64")}` } }) as ContentPart),
+        ]
+      : content + attText;
+    const messages: ChatMsg[] = [{ role: "system", content: system }, ...history, { role: "user", content: userContent }];
+    const inputTokens = approxInputTokens(messages);
     const expected = creditsFor({ mode: kind, calls: [{ model: modelId, inputTokens, outputTokens: LIMITS[kind].expectedOut }] });
     const reserve = ceil2(Math.max(expected * 1.5, kind === "build" ? 0.5 : 0.05));
     return { kind, modelId, reason, messages, inputTokens, expected, reserve };
   };
 
+  const loadPending = async (req: FastifyRequest, ids: string[]) => {
+    if (!ids.length) return [] as AttachmentRow[];
+    const r = await pool.query(
+      `select id, name, mime, kind, text_content, data, truncated from attachments
+       where id = any($1) and workspace_id = $2 and user_id = $3 and message_id is null`,
+      [ids, req.session!.wid, req.session!.uid],
+    );
+    if (r.rowCount !== ids.length) throw err(400, "ANEXO_INVALIDO");
+    return r.rows as AttachmentRow[];
+  };
+
   app.post("/api/estimate", async (req) => {
-    const b = z.object({ conversationId: z.string(), content: z.string(), model: z.string().default("auto") }).parse(req.body);
+    const b = z
+      .object({ conversationId: z.string(), content: z.string(), model: z.string().default("auto"), attachmentIds: z.array(z.string()).max(5).default([]) })
+      .parse(req.body);
     const conv = await loadConv(req, b.conversationId);
-    const t = await buildTurn(conv, b.content || " ", b.model);
+    const t = await buildTurn(conv, b.content || " ", b.model, await loadPending(req, b.attachmentIds));
     const m = catalog.get(t.modelId)!;
     return { model: { id: m.id, label: m.label }, reason: t.reason, expected: t.expected };
   });
@@ -242,10 +305,13 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
 
   app.post("/api/conversations/:id/messages", async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const b = z.object({ content: z.string().trim().min(1).max(50_000), model: z.string().default("auto") }).parse(req.body);
+    const b = z
+      .object({ content: z.string().trim().min(1).max(50_000), model: z.string().default("auto"), attachmentIds: z.array(z.string()).max(5).default([]) })
+      .parse(req.body);
     const { wid } = req.session!;
     const conv = await loadConv(req, id);
-    const turn = await buildTurn(conv, b.content, b.model);
+    const attachments = await loadPending(req, b.attachmentIds);
+    const turn = await buildTurn(conv, b.content, b.model, attachments);
     const model = catalog.get(turn.modelId)!;
     const actionId = `act_${randomUUID()}`;
 
@@ -263,7 +329,9 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
       }
     }
 
-    await pool.query("insert into messages (id, conversation_id, role, content) values ($1,$2,'user',$3)", [`msg_${randomUUID()}`, id, b.content]);
+    const userMsgId = `msg_${randomUUID()}`;
+    await pool.query("insert into messages (id, conversation_id, role, content) values ($1,$2,'user',$3)", [userMsgId, id, b.content]);
+    if (attachments.length) await pool.query("update attachments set message_id = $1 where id = any($2)", [userMsgId, attachments.map((a) => a.id)]);
     if (conv.title === "Nova conversa" || conv.title === "Novo app") {
       const title = b.content.replace(/\s+/g, " ").slice(0, 60);
       await pool.query("update conversations set title = $2 where id = $1", [id, title]);
@@ -357,6 +425,115 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
       send("error", { error: "ERRO_INTERNO" });
     }
     res.end();
+  });
+
+  // ---------- Anexos ----------
+
+  app.post("/api/uploads", async (req, reply) => {
+    const file = await req.file();
+    if (!file) throw err(400, "ARQUIVO_AUSENTE");
+    let buf: Buffer;
+    try {
+      buf = await file.toBuffer();
+    } catch {
+      throw err(413, "ARQUIVO_MAIOR_QUE_10MB");
+    }
+    let ex;
+    try {
+      ex = await extract(buf, file.filename, file.mimetype);
+    } catch (e) {
+      if (e instanceof UploadError) throw err(e.statusCode, e.message);
+      throw e;
+    }
+    const id = `att_${randomUUID()}`;
+    await pool.query(
+      `insert into attachments (id, workspace_id, user_id, name, mime, kind, size_bytes, text_content, data, truncated)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, req.session!.wid, req.session!.uid, file.filename.slice(0, 200), ex.mime, ex.kind, buf.length, ex.text, ex.kind === "image" ? buf : null, ex.truncated],
+    );
+    return reply.code(201).send({ id, name: file.filename, kind: ex.kind, size: buf.length, chars: ex.text?.length ?? 0, truncated: ex.truncated });
+  });
+
+  app.get("/api/attachments/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const r = await pool.query("select mime, kind, data, name from attachments where id = $1 and workspace_id = $2", [id, req.session!.wid]);
+    if (!r.rowCount || r.rows[0].kind !== "image") throw err(404, "ANEXO_NAO_ENCONTRADO");
+    return reply.header("content-type", r.rows[0].mime).header("cache-control", "private, max-age=86400").send(r.rows[0].data);
+  });
+
+  // ---------- Publicação de apps ----------
+
+  app.post("/api/conversations/:id/publish", async (req) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const c = await loadConv(req, id);
+    if (c.kind !== "build" || !c.artifact_html) throw err(400, "NADA_PARA_PUBLICAR");
+    const slug = c.published_slug ?? `${slugify(c.title)}-${randomUUID().slice(0, 6)}`;
+    await pool.query(
+      "update conversations set published_slug = $2, published_html = artifact_html, published_version = artifact_version, published_at = now() where id = $1",
+      [id, slug],
+    );
+    return { slug, url: `/p/${slug}`, version: c.artifact_version };
+  });
+
+  app.delete("/api/conversations/:id/publish", async (req) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    await loadConv(req, id);
+    await pool.query("update conversations set published_slug = null, published_html = null, published_version = null, published_at = null where id = $1", [id]);
+    return { ok: true };
+  });
+
+  // ---------- Painel de administração ----------
+
+  app.get("/api/admin/stats", async (req) => {
+    const u = await pool.query("select email from users where id = $1", [req.session!.uid]);
+    if (!u.rowCount || !isAdmin(u.rows[0].email)) throw err(403, "SOMENTE_ADMIN");
+    const { days } = z.object({ days: z.coerce.number().int().min(1).max(365).default(30) }).parse(req.query);
+    const since = `now() - make_interval(days => ${days})`;
+    const value = CONFIG.creditValueBRL;
+
+    const [totals, byModel, byDay, users, plans, paid] = await Promise.all([
+      pool.query(`select count(*)::int as actions, coalesce(sum(credits),0) as credits, coalesce(sum(real_cost_brl),0) as cost,
+                         coalesce(sum(writeoff),0) as writeoff, count(distinct workspace_id)::int as active_workspaces
+                  from action_usage where created_at > ${since}`),
+      pool.query(`select split_part(task_type, ':', 1) as mode, split_part(task_type, ':', 2) as model, count(*)::int as actions,
+                         sum(input_tokens)::bigint as input_tokens, sum(output_tokens)::bigint as output_tokens,
+                         coalesce(sum(credits),0) as credits, coalesce(sum(real_cost_brl),0) as cost
+                  from action_usage where created_at > ${since} and task_type like '%:%'
+                  group by 1, 2 order by cost desc`),
+      pool.query(`select to_char(date_trunc('day', created_at at time zone 'America/Sao_Paulo'), 'YYYY-MM-DD') as day, count(*)::int as actions,
+                         coalesce(sum(credits),0) as credits, coalesce(sum(real_cost_brl),0) as cost
+                  from action_usage where created_at > ${since} group by 1 order by 1`),
+      pool.query(`select count(*)::int as total, count(*) filter (where created_at > ${since})::int as new from users`),
+      pool.query(`select plan_id, count(*)::int as n from workspaces group by 1 order by 2 desc`),
+      pool.query(`select coalesce(sum(-l.amount) filter (where b.kind in ('plan','topup','bonus')),0) as paid,
+                         coalesce(sum(-l.amount) filter (where b.kind in ('daily_chat','daily_build')),0) as free
+                  from credit_ledger l join credit_buckets b on b.id = l.bucket_id
+                  where l.type = 'debit' and l.created_at > ${since}`),
+    ]);
+
+    const t = totals.rows[0];
+    const revenue = t.credits * value;
+    const mrr = plans.rows.reduce((s, p) => s + (PLANS[p.plan_id]?.priceBRL ?? 0) * p.n, 0);
+    return {
+      days,
+      creditValueBRL: value,
+      totals: {
+        actions: t.actions,
+        credits: t.credits,
+        creditsPaid: paid.rows[0].paid,
+        creditsFree: paid.rows[0].free,
+        revenueNominalBRL: revenue,
+        costBRL: t.cost,
+        grossMargin: revenue > 0 ? 1 - t.cost / revenue : null,
+        writeoffCredits: t.writeoff,
+        activeWorkspaces: t.active_workspaces,
+      },
+      users: users.rows[0],
+      plans: plans.rows.map((p) => ({ planId: p.plan_id, name: PLANS[p.plan_id]?.name ?? p.plan_id, workspaces: p.n })),
+      mrrBRL: mrr,
+      byModel: byModel.rows.map((r) => ({ ...r, input_tokens: Number(r.input_tokens), output_tokens: Number(r.output_tokens), margin: r.credits > 0 ? 1 - r.cost / (r.credits * value) : null })),
+      byDay: byDay.rows,
+    };
   });
 
   // ---------- Cobrança ----------

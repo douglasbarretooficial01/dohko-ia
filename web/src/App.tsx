@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type ConvSummary, type Me, type ModelInfo } from "./api";
+import { AdminPanel } from "./components/AdminPanel";
 import { Auth } from "./components/Auth";
 import { PlansModal } from "./components/PlansModal";
 import { Sidebar } from "./components/Sidebar";
@@ -19,6 +20,7 @@ export function App() {
   const [plansOpen, setPlansOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -53,6 +55,7 @@ export function App() {
     const c = await api.createConversation(kind);
     setConvs((cs) => [c, ...cs]);
     setActiveId(c.id);
+    setAdminOpen(false);
     setMenuOpen(false);
   };
 
@@ -74,6 +77,12 @@ export function App() {
         activeId={activeId}
         onSelect={(id) => {
           setActiveId(id);
+          setAdminOpen(false);
+          setMenuOpen(false);
+        }}
+        onAdmin={() => {
+          setAdminOpen(true);
+          setActiveId(null);
           setMenuOpen(false);
         }}
         onNew={newConversation}
@@ -88,7 +97,9 @@ export function App() {
       <div className="backdrop" onClick={() => setMenuOpen(false)} />
       <main className="main">
         <button className="menu-btn" onClick={() => setMenuOpen(true)} aria-label="Abrir menu">☰</button>
-        {activeId && models ? (
+        {adminOpen ? (
+          <AdminPanel onClose={() => setAdminOpen(false)} />
+        ) : activeId && models ? (
           <Workspace
             key={activeId}
             convId={activeId}
