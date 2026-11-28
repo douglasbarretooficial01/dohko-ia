@@ -1,7 +1,11 @@
 #!/bin/sh
 # Prepara e sobe a Dohko IA no Mac (requer OrbStack ou Docker Desktop aberto).
 set -e
-cd "$(dirname "$0")/.."
+is_dohko() { [ -f "$1/docker-compose.yml" ] && [ -f "$1/package.json" ] && grep -q '"name": "dohko-ia"' "$1/package.json" 2>/dev/null; }
+if is_dohko "$PWD"; then cd "$PWD"
+elif is_dohko "$HOME/dohko-ia"; then cd "$HOME/dohko-ia"
+else echo "Rode este script de dentro da pasta da Dohko IA (ex.: cd ~/dohko-ia)."; exit 1
+fi
 if ! docker info >/dev/null 2>&1; then
   echo "Abrindo o OrbStack..."; open -a OrbStack 2>/dev/null || true
   until docker info >/dev/null 2>&1; do sleep 2; done
