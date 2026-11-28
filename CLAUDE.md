@@ -14,6 +14,7 @@ docker compose logs -f api                  # logs
 npm run dev                                 # API com hot reload (com `docker compose up -d db`)
 npm run dev:web                             # front em :5173, repassa /api para :3000
 npm run typecheck && (cd web && npx tsc --noEmit)
+npm run check:models                        # confere o catálogo contra a lista pública do OpenRouter (IDs, preços, imagem)
 TEST_DATABASE_URL=postgresql://dohko:dohko@localhost:5432/dohko_test npm test   # criar antes: docker compose exec db createdb -U dohko dohko_test
 ```
 
@@ -34,6 +35,7 @@ src/
   llm/                 models.ts (catálogo + IDs do OpenRouter), router.ts (Dohko One), provider.ts (OpenRouter + mock), prompts.ts
   billing/stripe.ts    checkout, recarga, webhooks
   uploads.ts           extração de PDF/DOCX/XLSX/CSV/texto e imagens
+  mail.ts              e-mail transacional (Resend) ou log em desenvolvimento
   jobs.ts              expiração de créditos e reservas órfãs (15 min)
 migrations/            SQL numerado, aplicado ao subir (com pg_advisory_lock)
 web/                   React + Vite, sem framework de CSS (web/src/styles.css)
@@ -45,7 +47,8 @@ test/                  vitest; fixtures em test/fixtures
 - **Créditos**: todo uso de IA segue `estimate → reserve → (modelo roda) → settle | release`. Saldo nunca fica negativo (excesso vira `writeoff`). `credit_ledger` é só de inserção e precisa fechar com a soma dos `credit_buckets`. Concessões e `settle` são idempotentes por chave (`idempotency_keys`). Toda operação do motor roda dentro de `withWorkspaceLock` (SELECT … FOR UPDATE).
 - **Falha do modelo sem resposta não cobra nada** (release). Resposta parcial cobra só o que foi gerado.
 - **Migrations**: nunca edite uma migration existente; crie a próxima numerada (`005_...sql`).
-- **Sessão**: o preHandler de `/api` confere a associação ao workspace em todo pedido (membro removido perde acesso na hora). Não remova isso.
+- **Sessão**: o preHandler de `/api` confere a associação ao workspace em todo pedido (membro removido perde acesso na hora) e recusa sessões emitidas antes da última troca de senha (`iat` × `password_changed_at`). Não remova isso.
+- **Recuperação de senha**: `/api/auth/forgot` responde igual exista ou não a conta (não revela e-mails). No banco fica só o sha256 do token; uso único, 1 hora, no máximo 3 pedidos por hora por conta.
 - **Apps publicados** (`/p/:slug`) são servidos com `Content-Security-Policy: sandbox` sem `allow-same-origin`. Nunca adicione `allow-same-origin` (o app publicado passaria a poder usar a sessão de quem está logado).
 - **Isolamento**: toda consulta filtra por `workspace_id` da sessão; conversas também por `user_id`.
 - **Erros da API**: códigos em MAIÚSCULAS_COM_UNDERLINE em português (`SALDO_INSUFICIENTE`, `SOMENTE_DONO`), via `Object.assign(new Error(code), { statusCode })`. O front traduz para frases.
@@ -62,8 +65,9 @@ test/                  vitest; fixtures em test/fixtures
 
 ## Pendências conhecidas (decisões do dono do produto)
 
-1. Chave do OpenRouter e primeira validação com modelos reais (IDs em `models.ts` podem ter mudado).
+1. Chave do OpenRouter e primeira validação com modelos reais (IDs e preços conferidos em 28/11/2026; rode `npm run check:models` antes de mudar o catálogo).
 2. Preços reais dos planos.
 3. Stripe (produtos em BRL, webhook) — fluxo já implementado e testado com Stripe falso.
 4. Deploy na VPS (`docker-compose.prod.yml` + Caddy com HTTPS; passo a passo no README).
-5. Não implementado ainda: recuperação de senha (precisa de provedor de e-mail), WhatsApp como canal, PDF escaneado (OCR).
+5. Chave do Resend (`RESEND_API_KEY`) e domínio verificado para enviar e-mails de verdade; sem ela, o link de redefinição aparece no log da API.
+6. Não implementado ainda: WhatsApp como canal, PDF escaneado (OCR).

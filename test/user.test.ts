@@ -105,13 +105,13 @@ describe.skipIf(!DB)("app do usuário (/api)", () => {
   it("chat: stream com meta → deltas → done, cobra o real e salva as mensagens", async () => {
     chatId = (await call("POST", "/api/conversations", { kind: "chat" })).json().id;
     const est = (await call("POST", "/api/estimate", { conversationId: chatId, content: "oi", model: "auto" })).json();
-    expect(est.model.id).toBe("gemini-flash");
+    expect(est.model.id).toBe("claude-haiku");
 
     const r = await call("POST", `/api/conversations/${chatId}/messages`, { content: "oi, quem é você?", model: "auto" });
     expect(r.headers["content-type"]).toContain("text/event-stream");
     const events = sse(r.payload);
     expect(events[0].event).toBe("meta");
-    expect(events[0].data.model.id).toBe("gemini-flash");
+    expect(events[0].data.model.id).toBe("claude-haiku");
     expect(events.some((e) => e.event === "delta")).toBe(true);
     const done = events.at(-1)!;
     expect(done.event).toBe("done");

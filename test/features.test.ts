@@ -148,8 +148,8 @@ describe.skipIf(!DB)("publicação, anexos e painel", () => {
     const chat = (await ana.call("POST", "/api/conversations", { kind: "chat" })).json().id;
     const auto = (await ana.call("POST", "/api/estimate", { conversationId: chat, content: "resuma", attachmentIds: [pdf.json().id, img.json().id] })).json();
     expect(auto.reason).toBe("pedido com imagem");
-    const noAtt = (await ana.call("POST", "/api/estimate", { conversationId: chat, content: "resuma", model: "gpt" })).json();
-    const withAtt = (await ana.call("POST", "/api/estimate", { conversationId: chat, content: "resuma", model: "gpt", attachmentIds: [pdf.json().id, img.json().id] })).json();
+    const noAtt = (await ana.call("POST", "/api/estimate", { conversationId: chat, content: "resuma", model: "gpt-sol" })).json();
+    const withAtt = (await ana.call("POST", "/api/estimate", { conversationId: chat, content: "resuma", model: "gpt-sol", attachmentIds: [pdf.json().id, img.json().id] })).json();
     expect(withAtt.expected).toBeGreaterThan(noAtt.expected); // anexos encarecem a estimativa
 
     const r = await ana.call("POST", `/api/conversations/${chat}/messages`, { content: "Resuma o relatório", attachmentIds: [pdf.json().id, img.json().id] });

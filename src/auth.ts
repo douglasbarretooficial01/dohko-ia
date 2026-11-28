@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
@@ -22,12 +22,14 @@ export interface Session {
   uid: string;
   wid: string;
   exp: number; // epoch segundos
+  iat?: number; // emitida em (epoch segundos); sessões anteriores à troca de senha são recusadas
 }
 
 const b64u = (b: Buffer | string) => Buffer.from(b).toString("base64url");
 
-export function signSession(s: Omit<Session, "exp">, secret: string, ttlDays = 30) {
-  const payload = b64u(JSON.stringify({ ...s, exp: Math.floor(Date.now() / 1000) + ttlDays * 86400 }));
+export function signSession(s: Omit<Session, "exp" | "iat">, secret: string, ttlDays = 30) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = b64u(JSON.stringify({ ...s, iat: now, exp: now + ttlDays * 86400 }));
   const sig = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
@@ -47,3 +49,7 @@ export function verifySession(token: string | undefined, secret: string): Sessio
     return null;
   }
 }
+
+/** Token aleatório para links de uso único; no banco só fica o hash. */
+export const newToken = () => randomBytes(32).toString("base64url");
+export const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");

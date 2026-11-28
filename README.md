@@ -48,6 +48,22 @@ No `.env`, coloque seu e-mail em `ADMIN_EMAILS=voce@empresa.com` (vários separa
 
 Uma única chave do OpenRouter dá acesso a todos os modelos. O OpenRouter informa o custo real de cada resposta, e é esse valor que o motor de créditos cobra (com a margem configurada).
 
+### Recuperação de senha (e-mail)
+
+O link "Esqueci minha senha" envia um e-mail com um link de uso único (vale 1 hora). Para enviar de verdade, crie uma chave no [Resend](https://resend.com/api-keys), verifique o domínio de envio e preencha `RESEND_API_KEY` e `MAIL_FROM` no `.env`. Sem a chave, o link aparece no log:
+
+```bash
+docker compose logs api | grep redefinir
+```
+
+### Conferir os modelos
+
+```bash
+npm install && npm run check:models
+```
+
+Compara o catálogo com a lista pública do OpenRouter: avisa se algum modelo saiu do ar, se o preço mudou e mostra os lançamentos mais novos de cada fornecedor.
+
 ### Comandos úteis
 
 ```bash
@@ -109,6 +125,7 @@ No `.env` da VPS, defina:
 | `DOMAIN` | `ia.dohko.com.br` |
 | `OPENROUTER_API_KEY` | sua chave |
 | `ADMIN_EMAILS` | e-mails com acesso ao painel |
+| `RESEND_API_KEY` e `MAIL_FROM` | envio dos e-mails de redefinição de senha |
 | `STRIPE_*` | chaves **live** e o segredo do endpoint `https://ia.dohko.com.br/webhooks/stripe` (eventos `invoice.paid`, `checkout.session.completed`, `customer.subscription.deleted`) |
 
 ```bash

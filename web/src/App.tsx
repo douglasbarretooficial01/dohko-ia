@@ -27,6 +27,7 @@ export function App() {
   const [expertsOpen, setExpertsOpen] = useState<{ id?: string | null } | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
   const [invite] = useState(() => new URLSearchParams(location.search).get("convite"));
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(location.search).get("redefinir"));
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -93,13 +94,17 @@ export function App() {
   };
 
   if (loading) return <div className="splash"><div className="logo-mark big">D</div></div>;
-  if (!me)
+  // link de redefinição de senha tem prioridade, mesmo com alguém logado neste navegador
+  if (!me || resetToken)
     return (
       <Auth
         invite={invite}
+        resetToken={resetToken}
         onAuth={(m) => {
-          if (invite) history.replaceState(null, "", "/");
+          if (invite || resetToken) history.replaceState(null, "", "/");
+          setResetToken(null);
           setMe(m);
+          if (resetToken) flash("Senha alterada. Você já está dentro.");
         }}
       />
     );

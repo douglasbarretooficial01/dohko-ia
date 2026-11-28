@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
-import { hashPassword, signSession, verifyPassword, verifySession, type Session } from "../auth.js";
+import { hashPassword, hashToken, newToken, signSession, verifyPassword, verifySession, type Session } from "../auth.js";
+import { LogMailer, resetEmail, type Mailer } from "../mail.js";
 import { createPlanCheckout, createTopupCheckout, type BillingDeps } from "../billing/stripe.js";
 import { PLANS } from "../credits/config.js";
 import type { CreditEngine } from "../credits/engine.js";
@@ -33,7 +34,12 @@ export interface UserRoutesDeps {
   secureCookies: boolean;
   billing: () => BillingDeps;
   adminEmails?: string[];
+  mailer?: Mailer;
+  appUrl?: string;
 }
+
+const RESET_TTL_MIN = 60;
+const RESET_MAX_PER_HOUR = 3;
 
 interface AttachmentRow {
   id: string;
@@ -73,13 +79,19 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
 
   // Tudo em /api exige sessão, exceto cadastro e login
   app.addHook("preHandler", async (req) => {
-    if (req.url.startsWith("/api/auth/signup") || req.url.startsWith("/api/auth/login")) return;
+    if (["/api/auth/signup", "/api/auth/login", "/api/auth/forgot", "/api/auth/reset"].some((p) => req.url.startsWith(p))) return;
     if (req.method === "GET" && req.url.startsWith("/api/invites/")) return;
     const s = verifySession(req.cookies[COOKIE], d.sessionSecret);
     if (!s) throw err(401, "SESSAO_INVALIDA");
-    // quem foi removido da equipe perde o acesso na hora, mesmo com o cookie válido
-    const m = await pool.query("select role from memberships where user_id = $1 and workspace_id = $2", [s.uid, s.wid]);
+    // quem foi removido da equipe perde o acesso na hora, mesmo com o cookie válido;
+    // depois de uma troca de senha, sessões emitidas antes dela deixam de valer
+    const m = await pool.query(
+      "select m.role, u.password_changed_at from memberships m join users u on u.id = m.user_id where m.user_id = $1 and m.workspace_id = $2",
+      [s.uid, s.wid],
+    );
     if (!m.rowCount) throw err(401, "SESSAO_INVALIDA");
+    const changed = m.rows[0].password_changed_at as Date | null;
+    if (changed && (s.iat ?? 0) < Math.floor(changed.getTime() / 1000)) throw err(401, "SESSAO_INVALIDA");
     req.session = s;
     req.role = m.rows[0].role;
   });
@@ -157,6 +169,77 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     const wid = b.inviteToken ? await acceptInvite(pool, b.inviteToken, r.rows[0].id) : r.rows[0].workspace_id;
     setSession(reply, r.rows[0].id, wid);
     return me(r.rows[0].id, wid);
+  });
+
+  // ---------- Recuperação de senha ----------
+
+  const mailer = d.mailer ?? new LogMailer((msg) => app.log.info(msg));
+
+  // Sempre responde igual, exista ou não a conta (não revela quais e-mails estão cadastrados)
+  app.post("/api/auth/forgot", async (req) => {
+    const { email } = z.object({ email: z.string().trim().toLowerCase().email() }).parse(req.body);
+    const u = await pool.query("select id, name, email from users where email = $1", [email]);
+    if (u.rowCount) {
+      const user = u.rows[0];
+      const recent = await pool.query("select count(*)::int as n from password_resets where user_id = $1 and created_at > now() - interval '1 hour'", [user.id]);
+      if (recent.rows[0].n < RESET_MAX_PER_HOUR) {
+        const token = newToken();
+        await pool.query("insert into password_resets (token_hash, user_id, expires_at) values ($1, $2, now() + make_interval(mins => $3))", [
+          hashToken(token),
+          user.id,
+          RESET_TTL_MIN,
+        ]);
+        const link = `${(d.appUrl ?? "").replace(/\/$/, "")}/?redefinir=${token}`;
+        try {
+          await mailer.send({ to: user.email, ...resetEmail(user.name, link) });
+        } catch (e) {
+          req.log.error(e, "falha ao enviar e-mail de redefinição");
+        }
+      }
+    }
+    return { ok: true };
+  });
+
+  const findReset = async (token: string) => {
+    const r = await pool.query(
+      "select r.user_id, r.expires_at, r.used_at, u.email from password_resets r join users u on u.id = r.user_id where r.token_hash = $1",
+      [hashToken(token)],
+    );
+    if (!r.rowCount) throw err(404, "LINK_INVALIDO");
+    if (r.rows[0].used_at) throw err(410, "LINK_JA_USADO");
+    if (new Date(r.rows[0].expires_at) < new Date()) throw err(410, "LINK_EXPIRADO");
+    return r.rows[0] as { user_id: string; email: string };
+  };
+
+  app.get("/api/auth/reset/:token", async (req) => {
+    const { token } = z.object({ token: z.string().min(10) }).parse(req.params);
+    const r = await findReset(token);
+    return { email: r.email };
+  });
+
+  app.post("/api/auth/reset", async (req, reply) => {
+    const b = z.object({ token: z.string().min(10), password: z.string().min(8, "A senha precisa de pelo menos 8 caracteres") }).parse(req.body);
+    const r = await findReset(b.token);
+    const hash = await hashPassword(b.password);
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      // marca o link como usado de forma atômica (dois cliques simultâneos não trocam a senha duas vezes)
+      const used = await c.query("update password_resets set used_at = now() where token_hash = $1 and used_at is null", [hashToken(b.token)]);
+      if (!used.rowCount) throw err(410, "LINK_JA_USADO");
+      await c.query("update users set password_hash = $2, password_changed_at = now() where id = $1", [r.user_id, hash]);
+      await c.query("update password_resets set used_at = now() where user_id = $1 and used_at is null", [r.user_id]); // invalida outros links
+      await c.query("commit");
+    } catch (e) {
+      await c.query("rollback");
+      throw e;
+    } finally {
+      c.release();
+    }
+    const m = await pool.query("select workspace_id from memberships where user_id = $1 order by created_at limit 1", [r.user_id]);
+    if (!m.rowCount) throw err(409, "CONTA_SEM_WORKSPACE");
+    setSession(reply, r.user_id, m.rows[0].workspace_id);
+    return me(r.user_id, m.rows[0].workspace_id);
   });
 
   app.post("/api/auth/logout", async (_req, reply) => {

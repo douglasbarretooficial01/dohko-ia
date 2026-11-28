@@ -11,6 +11,7 @@ import { env, stripePrices } from "./env.js";
 import { startJobs } from "./jobs.js";
 import { DEFAULT_MODELS, ModelCatalog, TIER_DEFAULT } from "./llm/models.js";
 import { MockProvider, OpenRouterProvider } from "./llm/provider.js";
+import { ResendMailer } from "./mail.js";
 
 CONFIG.usdToBrl = env.USD_TO_BRL;
 
@@ -38,6 +39,7 @@ const app = buildApp({
   sessionSecret: env.SESSION_SECRET,
   secureCookies: env.APP_URL.startsWith("https://"),
   adminEmails: env.ADMIN_EMAILS.split(","),
+  mailer: env.RESEND_API_KEY ? new ResendMailer(env.RESEND_API_KEY, env.MAIL_FROM) : undefined,
   webDir: join(dirname(fileURLToPath(import.meta.url)), "../web/dist"),
 });
 

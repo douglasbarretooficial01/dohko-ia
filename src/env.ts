@@ -16,6 +16,9 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET precisa de pelo menos 32 caracteres"),
   /** Chave do OpenRouter (https://openrouter.ai/keys). Vazia = modo simulado. */
   OPENROUTER_API_KEY: z.string().default(""),
+  /** E-mail (Resend). Vazio = os e-mails aparecem no log da API. */
+  RESEND_API_KEY: z.string().default(""),
+  MAIL_FROM: z.string().default("Dohko IA <nao-responda@dohkotechnology.com.br>"),
   /** E-mails com acesso ao painel de administração, separados por vírgula. */
   ADMIN_EMAILS: z.string().default(""),
   /** Opcional: catálogo de modelos em JSON (sobrescreve o padrão de src/llm/models.ts). */

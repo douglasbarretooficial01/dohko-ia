@@ -66,7 +66,7 @@ describe.skipIf(!DB)("especialistas e equipe", () => {
     const tpl = (await as("Dono").call("GET", "/api/expert-templates")).json();
     expect(tpl.length).toBeGreaterThanOrEqual(4);
     const fin = tpl.find((t: any) => t.key === "financeiro");
-    const r = await as("Dono").call("POST", "/api/experts", { name: fin.name, emoji: fin.emoji, description: fin.description, instructions: fin.instructions, model: "gpt" });
+    const r = await as("Dono").call("POST", "/api/experts", { name: fin.name, emoji: fin.emoji, description: fin.description, instructions: fin.instructions, model: "gpt-sol" });
     expect(r.statusCode).toBe(201);
     expertId = r.json().id;
 
@@ -84,7 +84,7 @@ describe.skipIf(!DB)("especialistas e equipe", () => {
     const conv = (await as("Dono").call("POST", "/api/conversations", { kind: "chat", expertId })).json();
     expect(conv.expert_emoji).toBe("📊");
     await as("Dono").call("POST", `/api/conversations/${conv.id}/messages`, { content: "Como foi outubro?" });
-    expect(last!.model).toBe("openai/gpt-5"); // modelo padrão do especialista ("gpt")
+    expect(last!.model).toBe("openai/gpt-6.2-sol"); // modelo padrão do especialista ("gpt-sol")
     const system = msgText(last!.messages[0]);
     expect(system).toContain('especialista "Analista financeiro de PME"');
     expect(system).toContain("Outubro | 120000 | 52");

@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import type { ModelCatalog } from "./llm/models.js";
 import type { LLMProvider } from "./llm/provider.js";
 import { userRoutes } from "./routes/user.js";
+import type { Mailer } from "./mail.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -38,6 +39,7 @@ export interface AppDeps {
   /** Pasta do front compilado (web/dist). Se existir, é servida em "/". */
   webDir?: string;
   adminEmails?: string[];
+  mailer?: Mailer;
 }
 
 /** Rotas internas (agentes/serviços da Dohko) — exigem x-api-key. */
@@ -212,6 +214,8 @@ export function buildApp(d: AppDeps) {
       secureCookies: d.secureCookies ?? false,
       billing,
       adminEmails: d.adminEmails,
+      mailer: d.mailer,
+      appUrl: d.appUrl,
     });
   });
 
