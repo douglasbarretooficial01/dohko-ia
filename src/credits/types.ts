@@ -9,6 +9,12 @@ export interface Plan {
   monthlyCredits: number;
   /** Preço em R$ por crédito avulso; null = plano sem recarga. */
   topupPriceBRL: number | null;
+  /** Período de cobrança: priceBRL é cobrado a cada mês ou a cada ano. Os créditos são sempre mensais. */
+  interval: "month" | "year";
+  /** Créditos do degrau (agrupa mensal e anual na tela). */
+  tierCredits: number;
+  /** Preço de referência da Lovable no mesmo período (US$), só para conferência interna. */
+  referenceUSD?: number;
 }
 
 export interface ModelCall {

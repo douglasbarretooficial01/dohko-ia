@@ -4,7 +4,7 @@ import type pg from "pg";
 import { z } from "zod";
 import { hashPassword, hashToken, newToken, signSession, verifyPassword, verifySession, type Session } from "../auth.js";
 import { LogMailer, resetEmail, type Mailer } from "../mail.js";
-import { createPlanCheckout, createTopupCheckout, type BillingDeps } from "../billing/stripe.js";
+import { changePlan, createPlanCheckout, createPortal, createTopupCheckout, type BillingDeps } from "../billing/stripe.js";
 import { PLANS } from "../credits/config.js";
 import type { CreditEngine } from "../credits/engine.js";
 import { InsufficientCreditsError } from "../credits/engine.js";
@@ -99,7 +99,7 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
   const me = async (uid: string, wid: string) => {
     await engine.grantDaily(wid);
     const r = await pool.query(
-      `select u.id, u.name, u.email, w.id as wid, w.name as wname, w.plan_id
+      `select u.id, u.name, u.email, w.id as wid, w.name as wname, w.plan_id, w.stripe_subscription_id
        from users u join memberships m on m.user_id = u.id join workspaces w on w.id = m.workspace_id
        where u.id = $1 and w.id = $2`,
       [uid, wid],
@@ -115,7 +115,7 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
       role: ws.rows.find((w) => w.id === wid)?.role ?? "member",
       user: { id: x.id, name: x.name, email: x.email },
       isAdmin: isAdmin(x.email),
-      workspace: { id: x.wid, name: x.wname, planId: x.plan_id, plan: PLANS[x.plan_id] },
+      workspace: { id: x.wid, name: x.wname, planId: x.plan_id, plan: PLANS[x.plan_id], hasSubscription: !!x.stripe_subscription_id },
       balance: await engine.balance(wid),
     };
   };
@@ -668,6 +668,17 @@ export async function userRoutes(app: FastifyInstance, d: UserRoutesDeps) {
     if (req.role !== "owner") throw err(403, "SOMENTE_DONO");
     const b = z.object({ planId: z.string() }).parse(req.body);
     return { url: await createPlanCheckout(d.billing(), req.session!.wid, b.planId) };
+  });
+
+  app.post("/api/billing/change", async (req) => {
+    if (req.role !== "owner") throw err(403, "SOMENTE_DONO");
+    const b = z.object({ planId: z.string() }).parse(req.body);
+    return changePlan(d.billing(), req.session!.wid, b.planId);
+  });
+
+  app.post("/api/billing/portal", async (req) => {
+    if (req.role !== "owner") throw err(403, "SOMENTE_DONO");
+    return { url: await createPortal(d.billing(), req.session!.wid) };
   });
 
   app.post("/api/billing/topup", async (req) => {

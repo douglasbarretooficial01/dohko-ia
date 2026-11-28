@@ -1,11 +1,13 @@
-import type { Plan } from "./types.js";
+import { CREDIT_VALUE_BRL, PLANS } from "./plans.js";
+
+export { PLANS };
 
 /** Parâmetros de negócio — ajuste aqui, sem tocar na lógica. */
 export const CONFIG = {
   /** Margem bruta alvo. preço = custo / (1 - margem). 0.65 → markup ~2,86x */
   targetGrossMargin: 0.65,
   /** Valor de referência de 1 crédito em R$ (receita esperada por crédito). */
-  creditValueBRL: 0.49,
+  creditValueBRL: CREDIT_VALUE_BRL,
   /** Câmbio US$→R$. Em produção, atualizar diariamente. */
   usdToBrl: 5.5,
   /** Cobrança mínima por ação de build (créditos). */
@@ -42,11 +44,4 @@ export const TASK_PROFILES: Record<string, { model: string; avgInputTokens: numb
   page_with_images: { model: "frontier", avgInputTokens: 40_000, avgOutputTokens: 10_000, avgToolCostsUSD: 0.08 },
 };
 
-/** Planos em R$ (exemplos — definir com o time comercial). */
-export const PLANS: Record<string, Plan> = {
-  free: { id: "free", name: "Grátis", priceBRL: 0, monthlyCredits: 0, topupPriceBRL: null },
-  pro_100: { id: "pro_100", name: "Pro 100", priceBRL: 49, monthlyCredits: 100, topupPriceBRL: 0.6 },
-  pro_200: { id: "pro_200", name: "Pro 200", priceBRL: 98, monthlyCredits: 200, topupPriceBRL: 0.6 },
-  pro_400: { id: "pro_400", name: "Pro 400", priceBRL: 196, monthlyCredits: 400, topupPriceBRL: 0.6 },
-  pro_800: { id: "pro_800", name: "Pro 800", priceBRL: 392, monthlyCredits: 800, topupPriceBRL: 0.6 },
-};
+

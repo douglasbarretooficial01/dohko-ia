@@ -23,20 +23,62 @@ async function ensureCustomer({ stripe, pool }: BillingDeps, workspaceId: string
 }
 
 /** Checkout de assinatura de um plano. */
+/** Preço recorrente montado na hora a partir da tabela (não exige criar preços no painel do Stripe). */
+function recurringPrice(planId: string) {
+  const plan = PLANS[planId];
+  return {
+    currency: "brl" as const,
+    unit_amount: Math.round(plan.priceBRL * 100),
+    recurring: { interval: plan.interval },
+  };
+}
+
 export async function createPlanCheckout(d: BillingDeps, workspaceId: string, planId: string) {
-  const price = d.prices[planId];
-  if (!PLANS[planId] || !price) throw bad(`PLANO_SEM_PRECO_STRIPE: ${planId}`);
+  const plan = PLANS[planId];
+  if (!plan || plan.priceBRL <= 0) throw bad(`PLANO_INEXISTENTE: ${planId}`);
+  const ws = await d.pool.query("select stripe_subscription_id from workspaces where id = $1", [workspaceId]);
+  if (ws.rows[0]?.stripe_subscription_id) throw bad("JA_TEM_ASSINATURA_TROQUE_O_PLANO"); // evita duas assinaturas cobrando juntas
   const customer = await ensureCustomer(d, workspaceId);
   const meta = { workspace_id: workspaceId, plan_id: planId };
+  const lineItem = d.prices[planId]
+    ? { price: d.prices[planId], quantity: 1 }
+    : { quantity: 1, price_data: { ...recurringPrice(planId), product_data: { name: `Dohko IA ${plan.name}` } } };
   const s = await d.stripe.checkout.sessions.create({
     mode: "subscription",
     customer,
-    line_items: [{ price, quantity: 1 }],
+    line_items: [lineItem],
     subscription_data: { metadata: meta },
     metadata: meta,
     success_url: `${d.appUrl}/?pagamento=sucesso`,
     cancel_url: `${d.appUrl}/?pagamento=cancelado`,
   });
+  return s.url;
+}
+
+/** Troca de plano de quem já assina: atualiza a assinatura com cobrança proporcional imediata. */
+export async function changePlan(d: BillingDeps, workspaceId: string, planId: string) {
+  const plan = PLANS[planId];
+  if (!plan || plan.priceBRL <= 0) throw bad(`PLANO_INEXISTENTE: ${planId}`);
+  const ws = await d.pool.query("select stripe_subscription_id, plan_id from workspaces where id = $1", [workspaceId]);
+  const subId = ws.rows[0]?.stripe_subscription_id;
+  if (!subId) throw bad("SEM_ASSINATURA");
+  if (ws.rows[0].plan_id === planId) throw bad("JA_E_O_PLANO_ATUAL");
+  const sub = await d.stripe.subscriptions.retrieve(subId);
+  const item = sub.items.data[0];
+  const product = typeof item.price.product === "string" ? item.price.product : item.price.product.id;
+  await d.stripe.subscriptions.update(subId, {
+    items: [d.prices[planId] ? { id: item.id, price: d.prices[planId] } : { id: item.id, price_data: { ...recurringPrice(planId), product } }],
+    proration_behavior: "always_invoice",
+    metadata: { workspace_id: workspaceId, plan_id: planId },
+  });
+  // os créditos do novo plano entram quando o Stripe confirmar o pagamento (invoice.paid)
+  return { planId };
+}
+
+/** Portal do Stripe: cartão, faturas e cancelamento. */
+export async function createPortal(d: BillingDeps, workspaceId: string) {
+  const customer = await ensureCustomer(d, workspaceId);
+  const s = await d.stripe.billingPortal.sessions.create({ customer, return_url: `${d.appUrl}/` });
   return s.url;
 }
 
@@ -85,7 +127,23 @@ export async function handleStripeEvent(d: BillingDeps, event: Stripe.Event) {
       const sub = await d.stripe.subscriptions.retrieve(subId);
       const { workspace_id, plan_id } = sub.metadata;
       if (!workspace_id || !plan_id) return { ignored: "assinatura_sem_metadata" };
-      await d.pool.query("update workspaces set plan_id = $2, stripe_subscription_id = $3 where id = $1", [workspace_id, plan_id, subId]);
+      const plan = PLANS[plan_id];
+      if (!plan) return { ignored: "plano_desconhecido" };
+      if (plan.interval === "year") {
+        // anual: libera o 1º mês agora e agenda os outros 11 (jobs.ts)
+        const periodEnd = invoice.lines?.data?.[0]?.period?.end;
+        await d.pool.query(
+          `update workspaces set plan_id = $2, stripe_subscription_id = $3, next_plan_grant_at = now() + interval '1 month',
+             plan_period_end = coalesce(to_timestamp($4), now() + interval '1 year') where id = $1`,
+          [workspace_id, plan_id, subId, periodEnd ?? null],
+        );
+      } else {
+        await d.pool.query("update workspaces set plan_id = $2, stripe_subscription_id = $3, next_plan_grant_at = null, plan_period_end = null where id = $1", [
+          workspace_id,
+          plan_id,
+          subId,
+        ]);
+      }
       await d.engine.grantPlanCycle(workspace_id, plan_id, invoice.id!);
       return { granted: "plan", workspace_id, plan_id };
     }
@@ -100,7 +158,10 @@ export async function handleStripeEvent(d: BillingDeps, event: Stripe.Event) {
     // Assinatura cancelada → volta ao grátis (créditos já concedidos seguem até vencer)
     case "customer.subscription.deleted": {
       const sub = event.data.object as Stripe.Subscription;
-      await d.pool.query("update workspaces set plan_id = 'free', stripe_subscription_id = null where stripe_subscription_id = $1", [sub.id]);
+      await d.pool.query(
+        "update workspaces set plan_id = 'free', stripe_subscription_id = null, next_plan_grant_at = null, plan_period_end = null where stripe_subscription_id = $1",
+        [sub.id],
+      );
       return { downgraded: sub.id };
     }
     default:

@@ -318,3 +318,13 @@ a { color: var(--gold-2); }
 .invite-box { display: grid; gap: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
 .invite-banner { background: #f5b30114; border: 1px solid #f5b30144; border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.5; }
 .team-modal .table { margin-top: 8px; }
+
+/* ---------- planos (degraus) ---------- */
+.plans-modal { width: min(760px, 100%); }
+.interval-toggle { display: flex; justify-content: center; margin: 18px 0 4px; }
+.interval-toggle .seg button { padding: 6px 14px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+.plans.two { grid-template-columns: 1fr 1.3fr; }
+.tier-select { display: grid; gap: 4px; margin: 6px 0 4px; }
+.tier-select select { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; color: var(--text); font: inherit; font-weight: 600; }
+.plan-feats { margin: 10px 0 4px; padding-left: 18px; color: #c9cdd8; font-size: 13.5px; display: grid; gap: 4px; }
+@media (max-width: 700px) { .plans.two { grid-template-columns: 1fr; } }

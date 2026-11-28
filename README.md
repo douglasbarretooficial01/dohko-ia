@@ -56,6 +56,16 @@ O link "Esqueci minha senha" envia um e-mail com um link de uso único (vale 1 h
 docker compose logs api | grep redefinir
 ```
 
+### Tabela de preços
+
+Os preços ficam 15% abaixo da Lovable em todos os degraus (mensal, anual e recarga), convertidos pelo câmbio de referência e arredondados para baixo. Para conferir no câmbio de hoje:
+
+```bash
+npm run check:pricing
+```
+
+Se o dólar cair a ponto de algum degrau perder o desconto, o comando avisa: atualize `REFERENCE_RATE` em `src/credits/plans.ts`.
+
 ### Conferir os modelos
 
 ```bash
@@ -92,15 +102,14 @@ TEST_DATABASE_URL=postgresql://dohko:dohko@localhost:5432/dohko_test npm test
 
 ## 2. Stripe (pagamentos)
 
-1. No [painel do Stripe](https://dashboard.stripe.com/test/products), em modo teste, crie um produto por plano (Pro 100, Pro 200, Pro 400, Pro 800) com **preço recorrente mensal em BRL**. Copie os IDs `price_…` para `STRIPE_PRICES` no `.env`.
-2. Coloque a chave `sk_test_…` em `STRIPE_SECRET_KEY`.
-3. No Mac, encaminhe os webhooks com o [Stripe CLI](https://docs.stripe.com/stripe-cli):
+1. Coloque a chave `sk_test_…` em `STRIPE_SECRET_KEY`. Não precisa cadastrar produtos nem preços: o checkout monta o preço em R$ a partir da tabela.
+2. No Mac, encaminhe os webhooks com o [Stripe CLI](https://docs.stripe.com/stripe-cli):
    ```bash
    stripe login
    stripe listen --forward-to localhost:3000/webhooks/stripe
    ```
    Copie o `whsec_…` exibido para `STRIPE_WEBHOOK_SECRET` e rode `docker compose up -d`.
-4. No app, clique em **Ver planos → Assinar** e pague com o cartão de teste `4242 4242 4242 4242`. Os créditos do plano entram assim que o Stripe confirma.
+3. No app, clique em **Ver planos → Assinar** e pague com o cartão de teste `4242 4242 4242 4242`. Os créditos do plano entram assim que o Stripe confirma.
 
 ---
 

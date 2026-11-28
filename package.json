@@ -14,7 +14,8 @@
     "dev:web": "npm --prefix web run dev",
     "build:web": "npm --prefix web run build",
     "build:all": "npm run build && npm run build:web",
-    "check:models": "tsx scripts/check-models.ts"
+    "check:models": "tsx scripts/check-models.ts",
+    "check:pricing": "tsx scripts/check-pricing.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

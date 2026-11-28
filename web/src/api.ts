@@ -9,6 +9,9 @@ export interface Plan {
   name: string;
   priceBRL: number;
   monthlyCredits: number;
+  interval: "month" | "year";
+  tierCredits: number;
+  topupPriceBRL: number | null;
 }
 export interface WorkspaceRef {
   id: string;
@@ -21,7 +24,7 @@ export interface Me {
   isAdmin?: boolean;
   role: "owner" | "member";
   workspaces: WorkspaceRef[];
-  workspace: { id: string; name: string; planId: string; plan?: Plan };
+  workspace: { id: string; name: string; planId: string; plan?: Plan; hasSubscription?: boolean };
   balance: Balance;
 }
 export interface ModelInfo {
@@ -203,6 +206,8 @@ export const api = {
   },
   checkout: (planId: string) => req<{ url: string }>("POST", "/api/billing/checkout", { planId }),
   topup: (credits: number) => req<{ url: string }>("POST", "/api/billing/topup", { credits }),
+  changePlan: (planId: string) => req<{ planId: string }>("POST", "/api/billing/change", { planId }),
+  portal: () => req<{ url: string }>("POST", "/api/billing/portal"),
 };
 
 export interface StreamHandlers {

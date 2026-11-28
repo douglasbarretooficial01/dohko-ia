@@ -43,6 +43,13 @@ export class CreditEngine {
     return this.grant(workspaceId, "plan", plan.monthlyCredits, addMonths(this.clock(), CONFIG.planCreditTtlMonths), `invoice:${invoiceId}`);
   }
 
+  /** Liberação mensal de um plano anual (idempotente por workspace + mês). */
+  grantPlanMonth(workspaceId: string, planId: string, monthKey: string) {
+    const plan = PLANS[planId];
+    if (!plan) throw new Error(`PLANO_INEXISTENTE: ${planId}`);
+    return this.grant(workspaceId, "plan", plan.monthlyCredits, addMonths(this.clock(), CONFIG.planCreditTtlMonths), `annual:${workspaceId}:${monthKey}`);
+  }
+
   /** Recarga avulsa paga. */
   grantTopup(workspaceId: string, credits: number, paymentId: string) {
     return this.grant(workspaceId, "topup", credits, addMonths(this.clock(), CONFIG.topupTtlMonths), `topup:${paymentId}`);

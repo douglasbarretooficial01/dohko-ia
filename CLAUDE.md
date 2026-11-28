@@ -15,6 +15,7 @@ npm run dev                                 # API com hot reload (com `docker co
 npm run dev:web                             # front em :5173, repassa /api para :3000
 npm run typecheck && (cd web && npx tsc --noEmit)
 npm run check:models                        # confere o catálogo contra a lista pública do OpenRouter (IDs, preços, imagem)
+npm run check:pricing                       # confere se a tabela continua ≥15% abaixo da Lovable no câmbio do dia (PTAX)
 TEST_DATABASE_URL=postgresql://dohko:dohko@localhost:5432/dohko_test npm test   # criar antes: docker compose exec db createdb -U dohko dohko_test
 ```
 
@@ -57,8 +58,10 @@ test/                  vitest; fixtures em test/fixtures
 
 ## Onde ajustar negócio
 
-- Margem, valor do crédito, créditos diários, validades: `CONFIG` em `src/credits/config.ts`
-- Planos e preço da recarga (R$): `PLANS` no mesmo arquivo (valores atuais são **exemplos**, não aprovados)
+- Margem, créditos diários, validades: `CONFIG` em `src/credits/config.ts`
+- **Preços** (decisão do dono, 28/11/2026): **15% abaixo da Lovable em todos os degraus**, mensal, anual e recarga. Gerados em `src/credits/plans.ts`: preço Lovable (US$) × 0,85 × câmbio de referência (PTAX), arredondado para baixo até ",90". O valor do crédito (base custo → créditos) = preço por crédito do Pro 100 mensal. `test/pricing.test.ts` impede qualquer degrau acima de 85% da Lovable. Não edite preço à mão: mude a tabela de referência ou `REFERENCE_RATE` e rode `npm run check:pricing` e os testes.
+- Plano anual: cobrado uma vez por ano; os créditos são liberados todo mês por `jobs.ts` (`next_plan_grant_at`), idempotente por mês.
+- Stripe: preços montados na hora (`price_data`), sem cadastro no painel; troca de plano por `subscriptions.update` com proporcional; nunca abrir segunda assinatura para o mesmo workspace.
 - Modelos e IDs do OpenRouter: `src/llm/models.ts` ou `DOHKO_MODELS` no `.env`
 - Regras do Dohko One: `src/llm/router.ts`
 - Personalidade e regras do construtor: `src/llm/prompts.ts`
@@ -66,8 +69,8 @@ test/                  vitest; fixtures em test/fixtures
 ## Pendências conhecidas (decisões do dono do produto)
 
 1. Chave do OpenRouter e primeira validação com modelos reais (IDs e preços conferidos em 28/11/2026; rode `npm run check:models` antes de mudar o catálogo).
-2. Preços reais dos planos.
-3. Stripe (produtos em BRL, webhook) — fluxo já implementado e testado com Stripe falso.
+2. Plano Business (a Lovable cobra o dobro do Pro por SSO e controles extras): não oferecido até existirem esses recursos.
+3. Stripe (chaves e webhook) — fluxo implementado e testado com Stripe falso.
 4. Deploy na VPS (`docker-compose.prod.yml` + Caddy com HTTPS; passo a passo no README).
 5. Chave do Resend (`RESEND_API_KEY`) e domínio verificado para enviar e-mails de verdade; sem ela, o link de redefinição aparece no log da API.
 6. Não implementado ainda: WhatsApp como canal, PDF escaneado (OCR).

@@ -15,9 +15,9 @@ describe("pricing", () => {
   });
 
   it("build cobra pelo custo real com markup e arredonda pra cima em 2 casas", () => {
-    // frontier: 20k in, 4k out → (20k*5 + 4k*25)/1e6 = US$0,20 → R$1,10 → ×2,857 → R$3,14 → /0,49 = 6,41 créditos
+    // frontier: 20k in, 4k out → (20k*5 + 4k*25)/1e6 = US$0,20 → R$1,10 → ×2,857 → R$3,14 → /1,17 (crédito de referência) = 2,69 créditos
     const c = creditsFor({ mode: "build", calls: [{ model: "frontier", inputTokens: 20_000, outputTokens: 4_000 }] });
-    expect(c).toBeCloseTo(6.42, 2);
+    expect(c).toBeCloseTo(2.69, 2);
   });
 
   it("ação parada antes de mudar algo é grátis; parcial paga proporcional", () => {
